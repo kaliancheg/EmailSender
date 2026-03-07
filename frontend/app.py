@@ -234,9 +234,9 @@ class EmailSenderApp:
         
         self.refresh_count_button = ttk.Button(
             count_frame,
-            text="🔄 Обновить",
+            text="Ref.",
             command=self._refresh_recipients_count,
-            width=10
+            width=5
         )
         self.refresh_count_button.pack(side=tk.LEFT)
 
