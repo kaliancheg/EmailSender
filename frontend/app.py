@@ -42,9 +42,9 @@ class EmailSenderApp:
         self.file_service = FileService()
         self.email_service: EmailService = None
         self.smtp_service: SMTPService = None
-        
+
         # Режим отправки
-        self.send_mode = tk.StringVar(value="outlook")  # "outlook" или "smtp"
+        self.send_mode = tk.StringVar(value="smtp")  # "outlook" или "smtp" (SMTP по умолчанию)
 
         # Состояние
         self.is_paused = False
@@ -52,12 +52,16 @@ class EmailSenderApp:
         self.total_emails = 0
         self.sent_count = 0
         self.failed_count = 0
-        
+
         # Очередь писем (для SMTP)
         self.email_queue: List[QueuedEmail] = []
 
         # Очередь UI
         self.ui_queue = queue.Queue()
+        
+        # Кэш аккаунтов Outlook (чтобы не запрашивать каждый раз)
+        self.outlook_accounts_cached: List[str] = []
+        self.outlook_accounts_loaded = False
 
         # Настройки по умолчанию
         self._init_default_settings()
@@ -70,9 +74,7 @@ class EmailSenderApp:
         self._load_settings()  # Загружаем настройки ДО инициализации UI
         self._update_mode_ui()  # Обновляем состояние кнопки SMTP
         
-        # Загружаем аккаунты Outlook только если выбран режим Outlook
-        if self.send_mode.get() == "outlook":
-            self._load_outlook_accounts()
+        # Outlook НЕ загружаем при инициализации - только при переключении на Outlook режим
 
         # Обработка очереди UI
         self.root.after(100, self._process_ui_queue)
@@ -284,13 +286,22 @@ class EmailSenderApp:
             self._log_message("Настройки SMTP сохранены")
 
     def _load_outlook_accounts(self):
-        """Загружает аккаунты Outlook"""
+        """Загружает аккаунты Outlook (с кэшированием)"""
+        # Если уже загружали, используем кэш
+        if self.outlook_accounts_loaded and self.outlook_accounts_cached:
+            self.settings_frame.set_account_values(self.outlook_accounts_cached)
+            return
+        
         try:
             import win32com.client as win32
             outlook = win32.Dispatch('Outlook.Application')
             namespace = outlook.GetNamespace("MAPI")
             accounts = [account.SmtpAddress for account in namespace.Accounts]
 
+            # Кэшируем аккаунты
+            self.outlook_accounts_cached = accounts
+            self.outlook_accounts_loaded = True
+            
             self.settings_frame.set_account_values(accounts)
             self._log_message(f"Найдено {len(accounts)} аккаунтов Outlook")
 
