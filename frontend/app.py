@@ -212,13 +212,22 @@ class EmailSenderApp:
         # Статистика (для SMTP)
         self.stats_frame = ttk.Frame(control_frame)
         self.stats_frame.pack(fill=tk.X, pady=(5, 0))
-        
+
         self.stats_label = ttk.Label(
             self.stats_frame,
             text="✅ 0 | ❌ 0 | 🕐 0 | 🔄 0",
             font=("TkDefaultFont", 9)
         )
         self.stats_label.pack(side=tk.LEFT)
+        
+        # Счётчик писем в файле
+        self.recipients_count_label = ttk.Label(
+            self.stats_frame,
+            text="📋 Писем в файле: 0",
+            font=("TkDefaultFont", 9),
+            foreground="blue"
+        )
+        self.recipients_count_label.pack(side=tk.RIGHT)
 
     def _setup_log_frame(self, parent):
         """Создаёт фрейм лога"""
@@ -316,6 +325,25 @@ class EmailSenderApp:
         )
         if file:
             self.settings_frame.excel_path.set(file)
+            # Обновляем счётчик писем
+            self._update_recipients_count(file)
+
+    def _update_recipients_count(self, file_path: str):
+        """Обновляет счётчик получателей из Excel файла"""
+        try:
+            recipients = ExcelService.read_recipients(file_path)
+            count = len(recipients)
+            self.recipients_count_label.config(
+                text=f"📋 Писем в файле: {count}",
+                foreground="green" if count > 0 else "red"
+            )
+            self._log_message(f"Загружено {count} получателей из Excel")
+        except Exception as e:
+            self.recipients_count_label.config(
+                text="📋 Писем в файле: ошибка",
+                foreground="red"
+            )
+            self._log_message(f"Ошибка подсчёта получателей: {str(e)}", "ERROR")
 
     def _browse_folder(self, folder_number: int):
         """Выбор папки"""
@@ -444,6 +472,9 @@ class EmailSenderApp:
             if not recipients:
                 messagebox.showerror("Ошибка", "Нет данных для рассылки")
                 return
+
+            # Обновляем счётчик перед отправкой
+            self._log_message(f"Подготовлено к отправке: {len(recipients)} писем")
 
             # Сброс состояния
             self.is_cancelled = False
@@ -770,6 +801,10 @@ class EmailSenderApp:
             self.send_mode.set(settings['send_mode'])
 
         self._log_message("Настройки загружены")
+        
+        # Обновляем счётчик получателей если файл указан
+        if 'excel_path' in settings and settings['excel_path']:
+            self._update_recipients_count(settings['excel_path'])
 
     def _save_settings(self):
         """Сохраняет настройки"""
