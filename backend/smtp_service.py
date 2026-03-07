@@ -49,10 +49,12 @@ class SMTPService:
             
             # Важно: From должен совпадать с email_login для авторизации
             # Для совместимости с Yandex, Gmail и другими
-            msg['From'] = self.config.email_login
             if self.config.sender_name:
-                # Если есть имя, добавляем его в формате: "Имя <email>"
+                # Формат: "Имя <email>" - правильно для всех SMTP серверов
                 msg['From'] = f"{self.config.sender_name} <{self.config.email_login}>"
+            else:
+                # Просто email
+                msg['From'] = self.config.email_login
             
             msg['To'] = queued_email.recipient_email
             msg['Subject'] = queued_email.subject
