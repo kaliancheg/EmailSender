@@ -5,12 +5,13 @@ from tkinter import ttk, filedialog, messagebox
 import queue
 import threading
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any
 
 from core.constants import (
-    MONTH_NAMES, DEFAULT_EMAIL_BODY, 
-    DEFAULT_THREAD_COUNT, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT
+    MONTH_NAMES, DEFAULT_EMAIL_BODY,
+    DEFAULT_THREAD_COUNT, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT,
+    get_previous_month_subject
 )
 from core.logger_config import setup_logger
 from models.email_data import EmailRecipient, EmailConfig
@@ -64,10 +65,7 @@ class EmailSenderApp:
     
     def _init_default_settings(self):
         """Инициализирует настройки по умолчанию"""
-        previous_month = (datetime.now() - timedelta(days=30)).month
-        current_year = datetime.now().strftime("%Y")
-        
-        self.default_subject = f"Расчетные листы {MONTH_NAMES[previous_month]} {current_year}"
+        self.default_subject = get_previous_month_subject()
         self.default_body = DEFAULT_EMAIL_BODY
         self.folder_paths: Dict[int, str] = {}
     
@@ -438,21 +436,22 @@ class EmailSenderApp:
     def _load_settings(self):
         """Загружает сохранённые настройки"""
         settings = self.settings_manager.load()
+
+        # Всегда устанавливаем актуальную тему с прошлым месяцем
+        self.settings_frame.email_subject.set(self.default_subject)
         
         if not settings:
-            # Устанавливаем значения по умолчанию
-            self.settings_frame.email_subject.set(self.default_subject)
+            # Устанавливаем текст письма по умолчанию
             self.settings_frame.set_email_body(self.default_body)
             return
-        
+
         if 'excel_path' in settings:
             self.settings_frame.excel_path.set(settings['excel_path'])
         if 'email_account' in settings:
             self.settings_frame.email_account.set(settings['email_account'])
         if 'thread_count' in settings:
             self.settings_frame.thread_count.set(settings['thread_count'])
-        if 'email_subject' in settings:
-            self.settings_frame.email_subject.set(settings['email_subject'])
+        # email_subject НЕ загружаем - используем актуальный
         if 'email_body' in settings:
             self.settings_frame.set_email_body(settings['email_body'])
         if 'folder_path_1' in settings:
@@ -464,7 +463,7 @@ class EmailSenderApp:
         if 'folder_path_3' in settings:
             self.settings_frame.folder_path_3.set(settings['folder_path_3'])
             self.folder_paths[3] = settings['folder_path_3']
-        
+
         self._log_message("Настройки загружены")
     
     def _save_settings(self):
