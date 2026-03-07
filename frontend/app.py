@@ -219,15 +219,26 @@ class EmailSenderApp:
             font=("TkDefaultFont", 9)
         )
         self.stats_label.pack(side=tk.LEFT)
+
+        # Счётчик писем в файле с кнопкой обновления
+        count_frame = ttk.Frame(self.stats_frame)
+        count_frame.pack(side=tk.RIGHT)
         
-        # Счётчик писем в файле
         self.recipients_count_label = ttk.Label(
-            self.stats_frame,
+            count_frame,
             text="📋 Писем в файле: 0",
             font=("TkDefaultFont", 9),
             foreground="blue"
         )
-        self.recipients_count_label.pack(side=tk.RIGHT)
+        self.recipients_count_label.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.refresh_count_button = ttk.Button(
+            count_frame,
+            text="🔄 Обновить",
+            command=self._refresh_recipients_count,
+            width=10
+        )
+        self.refresh_count_button.pack(side=tk.LEFT)
 
     def _setup_log_frame(self, parent):
         """Создаёт фрейм лога"""
@@ -345,6 +356,16 @@ class EmailSenderApp:
             )
             self._log_message(f"Ошибка подсчёта получателей: {str(e)}", "ERROR")
 
+    def _refresh_recipients_count(self):
+        """Повторный подсчёт получателей из текущего файла"""
+        file_path = self.settings_frame.excel_path.get()
+        if not file_path:
+            messagebox.showwarning("Предупреждение", "Сначала выберите Excel файл")
+            return
+        
+        self._log_message("Обновление количества получателей...")
+        self._update_recipients_count(file_path)
+
     def _browse_folder(self, folder_number: int):
         """Выбор папки"""
         folder = filedialog.askdirectory(title=f"Выберите папку {folder_number} с файлами")
@@ -413,6 +434,7 @@ class EmailSenderApp:
         self.pause_button.config(state=tk.DISABLED)
         self.cancel_button.config(state=tk.DISABLED)
         self.preview_button.config(state=tk.NORMAL)
+        self.refresh_count_button.config(state=tk.NORMAL)
 
         success = item.get('success_count', 0)
         failed = item.get('failed_count', 0)
@@ -485,6 +507,7 @@ class EmailSenderApp:
             self.pause_button.config(state=tk.NORMAL)
             self.cancel_button.config(state=tk.NORMAL)
             self.preview_button.config(state=tk.DISABLED)
+            self.refresh_count_button.config(state=tk.DISABLED)
 
             # Запуск в потоке
             self.total_emails = len(recipients)
@@ -762,6 +785,7 @@ class EmailSenderApp:
         self.pause_button.config(state=tk.DISABLED)
         self.cancel_button.config(state=tk.DISABLED)
         self.preview_button.config(state=tk.NORMAL)
+        self.refresh_count_button.config(state=tk.NORMAL)
 
     def _load_settings(self):
         """Загружает сохранённые настройки"""
