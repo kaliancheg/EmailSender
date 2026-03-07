@@ -21,16 +21,18 @@ logger = logging.getLogger("email_sender")
 class SMTPService:
     """Сервис для отправки email через SMTP"""
     
-    def __init__(self, config: SMTPConfig, thread_count: int = 3):
+    def __init__(self, config: SMTPConfig, thread_count: int = 3, delay_between_emails: float = 0.0):
         """
         Инициализация SMTP сервиса.
         
         Args:
             config: Конфигурация SMTP сервера
             thread_count: Количество потоков для отправки (по умолчанию 3)
+            delay_between_emails: Задержка между письмами в секундах (по умолчанию 0)
         """
         self.config = config
         self.thread_count = min(max(thread_count, 1), 10)  # Ограничение 1-10
+        self.delay_between_emails = delay_between_emails  # Задержка в секундах
         self.is_cancelled = False
         self.is_paused = False
         self._pause_lock = threading.Lock()
@@ -60,6 +62,11 @@ class SMTPService:
         try:
             queued_email.status = EmailStatus.SENDING
             queued_email.last_attempt = datetime.now()
+
+            # Задержка перед отправкой (для соблюдения лимитов SMTP)
+            if self.delay_between_emails > 0:
+                import time
+                time.sleep(self.delay_between_emails)
 
             # Создаём сообщение
             msg = MIMEMultipart()

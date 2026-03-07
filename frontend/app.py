@@ -536,10 +536,12 @@ class EmailSenderApp:
             sender_name=self.smtp_settings['sender_name']
         )
 
-        # Передаём количество потоков из настроек
+        # Передаём количество потоков и задержку из настроек
+        # Задержка 1.5 секунды для соблюдения лимитов Yandex/Gmail
         self.smtp_service = SMTPService(
             config, 
-            thread_count=self.settings_frame.thread_count.get()
+            thread_count=self.settings_frame.thread_count.get(),
+            delay_between_emails=1.5  # Задержка 1.5 секунды между письмами
         )
 
         # Подготовка очереди писем
