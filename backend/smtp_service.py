@@ -33,33 +33,40 @@ class SMTPService:
     def send_email(self, queued_email: QueuedEmail) -> bool:
         """
         Отправляет одно письмо.
-        
+
         Args:
             queued_email: Письмо для отправки
-            
+
         Returns:
             True если успешно
         """
         try:
             queued_email.status = EmailStatus.SENDING
             queued_email.last_attempt = datetime.now()
-            
+
             # Создаём сообщение
             msg = MIMEMultipart()
-            msg['From'] = self.config.display_name
+            
+            # Важно: From должен совпадать с email_login для авторизации
+            # Для совместимости с Yandex, Gmail и другими
+            msg['From'] = self.config.email_login
+            if self.config.sender_name:
+                # Если есть имя, добавляем его в формате: "Имя <email>"
+                msg['From'] = f"{self.config.sender_name} <{self.config.email_login}>"
+            
             msg['To'] = queued_email.recipient_email
             msg['Subject'] = queued_email.subject
-            
+
             # Добавляем тело письма
             msg.attach(MIMEText(queued_email.body, 'plain', 'utf-8'))
-            
+
             # Добавляем вложения
             for file_path in queued_email.attachments:
                 if Path(file_path).exists():
                     attachment = self._create_attachment(file_path)
                     if attachment:
                         msg.attach(attachment)
-            
+
             # Подключение к серверу
             if self.config.use_ssl:
                 # SSL подключение (порт 465)
@@ -70,37 +77,45 @@ class SMTPService:
                 server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port)
                 if self.config.use_tls:
                     server.starttls(context=ssl.create_default_context())
-            
+
             try:
                 # Авторизация
                 server.login(self.config.email_login, self.config.email_password)
-                
+
                 # Отправка
                 server.send_message(msg)
-                
+
                 queued_email.status = EmailStatus.SENT
                 queued_email.sent_at = datetime.now()
-                
+
                 logger.info(f"Письмо отправлено: {queued_email.recipient_email}")
                 return True
-                
+
             finally:
                 server.quit()
-                
+
         except smtplib.SMTPAuthenticationError as e:
             error_msg = f"Ошибка авторизации SMTP: {str(e)}"
             logger.error(error_msg)
             queued_email.status = EmailStatus.FAILED
             queued_email.error_message = error_msg
             return False
-            
+
         except smtplib.SMTPConnectError as e:
             error_msg = f"Ошибка подключения к SMTP серверу: {str(e)}"
             logger.error(error_msg)
             queued_email.status = EmailStatus.FAILED
             queued_email.error_message = error_msg
             return False
-            
+
+        except smtplib.SMTPSenderRefused as e:
+            # Ошибка "Sender address rejected" - отклонён адрес отправителя
+            error_msg = f"Адрес отправителя отклонён: {str(e)}. Убедитесь, что From совпадает с логином авторизации."
+            logger.error(error_msg)
+            queued_email.status = EmailStatus.FAILED
+            queued_email.error_message = error_msg
+            return False
+
         except Exception as e:
             error_msg = f"Ошибка отправки письма: {str(e)}"
             logger.error(error_msg)
