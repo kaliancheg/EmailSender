@@ -389,23 +389,25 @@ class EmailSenderApp:
         self._log_message("Рассылка отменена пользователем", "WARNING")
     
     def _preview_email(self):
-        """Предварительный просмотр"""
+        """Предварительный просмотр случайного получателя"""
         try:
             if not self._validate_settings():
                 return
-            
+
             recipients = ExcelService.read_recipients(self.settings_frame.excel_path.get())
-            
+
             if not recipients:
                 messagebox.showerror("Ошибка", "Нет данных для просмотра")
                 return
-            
+
+            # Выбираем случайного получателя
             recipient = random.choice(recipients)
-            
+            recipient_index = recipients.index(recipient) + 1
+
             if not recipient.email:
                 messagebox.showerror("Ошибка", "Нет email для просмотра")
                 return
-            
+
             config = EmailConfig(
                 account=self.settings_frame.email_account.get(),
                 subject=self.settings_frame.email_subject.get(),
@@ -416,12 +418,12 @@ class EmailSenderApp:
                     self.settings_frame.folder_path_3.get()
                 ]
             )
-            
+
             email_service = EmailService(config)
             email_service.preview_email(recipient)
-            
-            self._log_message(f"Предварительный просмотр для: {recipient.email}")
-            
+
+            self._log_message(f"Предварительный просмотр для: {recipient.email} (строка {recipient_index})")
+
         except Exception as e:
             self._log_message(f"Ошибка预览: {str(e)}", "ERROR")
             messagebox.showerror("Ошибка", f"Произошла ошибка: {str(e)}")
