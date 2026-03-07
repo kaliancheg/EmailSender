@@ -140,8 +140,18 @@ class SettingsFrame(ttk.LabelFrame, ContextMenuMixin):
         
         # Текст письма
         ttk.Label(self, text="Текст письма:").grid(row=7, column=0, sticky=tk.NW, pady=5)
-        self.body_text = tk.Text(self, height=8, width=50, wrap=tk.WORD)
-        self.body_text.grid(row=7, column=1, padx=5, pady=5, columnspan=2, sticky=(tk.W, tk.E))
+        
+        # Фрейм для текста и скроллбара
+        text_frame = ttk.Frame(self)
+        text_frame.grid(row=7, column=1, padx=5, pady=5, columnspan=2, sticky=(tk.W, tk.E))
+        
+        self.body_text = tk.Text(text_frame, height=8, width=50, wrap=tk.WORD)
+        self.body_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Вертикальная прокрутка
+        text_scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.body_text.yview)
+        text_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.body_text.configure(yscrollcommand=text_scrollbar.set)
         
         # Контекстное меню
         self.add_context_menu(self.body_text)
