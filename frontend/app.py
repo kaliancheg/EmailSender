@@ -1,0 +1,492 @@
+"""Главный класс приложения"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import queue
+import threading
+import random
+from datetime import datetime, timedelta
+from typing import Dict, Any
+
+from core.constants import (
+    MONTH_NAMES, DEFAULT_EMAIL_BODY, 
+    DEFAULT_THREAD_COUNT, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT
+)
+from core.logger_config import setup_logger
+from models.email_data import EmailRecipient, EmailConfig
+from backend.email_service import EmailService
+from backend.excel_service import ExcelService
+from backend.settings_manager import SettingsManager
+from backend.file_service import FileService
+from frontend.ui_components import SettingsFrame
+
+
+logger = setup_logger()
+
+
+class EmailSenderApp:
+    """Главный класс приложения"""
+    
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Почтовая рассылка расчетных листов ФитоФарм")
+        self.root.geometry(f"{DEFAULT_WINDOW_WIDTH}x{DEFAULT_WINDOW_HEIGHT}")
+        self.root.resizable(False, False)
+        
+        # Сервисы
+        self.settings_manager = SettingsManager()
+        self.file_service = FileService()
+        self.email_service: EmailService = None
+        
+        # Состояние
+        self.is_paused = False
+        self.is_cancelled = False
+        self.total_emails = 0
+        self.sent_count = 0
+        self.failed_count = 0
+        
+        # Очередь UI
+        self.ui_queue = queue.Queue()
+        
+        # Настройки по умолчанию
+        self._init_default_settings()
+        
+        # Callbacks
+        self._setup_callbacks()
+        
+        # UI
+        self._setup_ui()
+        self._load_outlook_accounts()
+        self._load_settings()
+        
+        # Обработка очереди UI
+        self.root.after(100, self._process_ui_queue)
+    
+    def _init_default_settings(self):
+        """Инициализирует настройки по умолчанию"""
+        previous_month = (datetime.now() - timedelta(days=30)).month
+        current_year = datetime.now().strftime("%Y")
+        
+        self.default_subject = f"Расчетные листы {MONTH_NAMES[previous_month]} {current_year}"
+        self.default_body = DEFAULT_EMAIL_BODY
+        self.folder_paths: Dict[int, str] = {}
+    
+    def _setup_callbacks(self):
+        """Настраивает callback функции"""
+        self.callbacks = {
+            'browse_excel': self._browse_excel,
+            'browse_folder': self._browse_folder
+        }
+    
+    def _setup_ui(self):
+        """Создаёт пользовательский интерфейс"""
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Фрейм настроек
+        self.settings_frame = SettingsFrame(main_frame, self.callbacks)
+        self.settings_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Фрейм управления
+        self._setup_control_frame(main_frame)
+        
+        # Фрейм лога
+        self._setup_log_frame(main_frame)
+        
+        # Центрирование
+        self.root.update_idletasks()
+        x = (self.root.winfo_screenwidth() - DEFAULT_WINDOW_WIDTH) // 2
+        y = (self.root.winfo_screenheight() - DEFAULT_WINDOW_HEIGHT) // 2
+        self.root.geometry(f"+{x}+{y}")
+    
+    def _setup_control_frame(self, parent):
+        """Создаёт фрейм управления"""
+        control_frame = ttk.LabelFrame(parent, text="Управление рассылкой", padding="10")
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Статус
+        status_frame = ttk.Frame(control_frame)
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.status_label = ttk.Label(
+            status_frame, text="Готов к отправке", 
+            font=("TkDefaultFont", 10, "bold")
+        )
+        self.status_label.pack(side=tk.LEFT)
+        
+        self.counter_label = ttk.Label(
+            status_frame, text="0/0", 
+            font=("TkDefaultFont", 10)
+        )
+        self.counter_label.pack(side=tk.RIGHT)
+        
+        # Прогресс-бар
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(
+            control_frame, variable=self.progress_var, 
+            maximum=100, mode='determinate'
+        )
+        self.progress_bar.pack(fill=tk.X, pady=(0, 10))
+        
+        # Кнопки
+        button_frame = ttk.Frame(control_frame)
+        button_frame.pack(fill=tk.X)
+        
+        self.send_button = ttk.Button(
+            button_frame, text="Начать рассылку", 
+            command=self._start_send
+        )
+        self.send_button.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.pause_button = ttk.Button(
+            button_frame, text="Пауза", 
+            command=self._toggle_pause, state=tk.DISABLED
+        )
+        self.pause_button.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.preview_button = ttk.Button(
+            button_frame, text="Предварительный просмотр", 
+            command=self._preview_email
+        )
+        self.preview_button.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.cancel_button = ttk.Button(
+            button_frame, text="Отмена", 
+            command=self._cancel_send, state=tk.DISABLED
+        )
+        self.cancel_button.pack(side=tk.LEFT)
+    
+    def _setup_log_frame(self, parent):
+        """Создаёт фрейм лога"""
+        log_frame = ttk.LabelFrame(parent, text="Лог выполнения", padding="10")
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.log_text = tk.Text(log_frame, height=12, width=80, wrap=tk.WORD)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(0, 5))
+        
+        # Контекстное меню
+        if hasattr(self.settings_frame, 'add_context_menu'):
+            self.settings_frame.add_context_menu(self.log_text)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+    
+    def _load_outlook_accounts(self):
+        """Загружает аккаунты Outlook"""
+        try:
+            import win32com.client as win32
+            outlook = win32.Dispatch('Outlook.Application')
+            namespace = outlook.GetNamespace("MAPI")
+            accounts = [account.SmtpAddress for account in namespace.Accounts]
+            
+            self.settings_frame.set_account_values(accounts)
+            self._log_message(f"Найдено {len(accounts)} аккаунтов Outlook")
+            
+        except Exception as e:
+            self._log_message(f"Ошибка загрузки аккаунтов Outlook: {str(e)}", "ERROR")
+    
+    def _browse_excel(self):
+        """Выбор Excel файла"""
+        file = filedialog.askopenfilename(
+            title="Выберите Excel файл",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
+        if file:
+            self.settings_frame.excel_path.set(file)
+    
+    def _browse_folder(self, folder_number: int):
+        """Выбор папки"""
+        folder = filedialog.askdirectory(title=f"Выберите папку {folder_number} с файлами")
+        if folder:
+            self.folder_paths[folder_number] = folder
+            if folder_number == 1:
+                self.settings_frame.folder_path_1.set(folder)
+            elif folder_number == 2:
+                self.settings_frame.folder_path_2.set(folder)
+            elif folder_number == 3:
+                self.settings_frame.folder_path_3.set(folder)
+    
+    def _log_message(self, message: str, level: str = "INFO"):
+        """Добавляет сообщение в лог"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {level}: {message}\n"
+        self.log_text.insert(tk.END, formatted_message)
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
+    
+    def _process_ui_queue(self):
+        """Обрабатывает очередь UI"""
+        try:
+            while True:
+                item = self.ui_queue.get_nowait()
+                item_type = item.get('type')
+                
+                if item_type == 'log':
+                    self._log_message(item['message'], item['level'])
+                elif item_type == 'status':
+                    self.status_label.config(text=item['message'])
+                elif item_type == 'progress':
+                    self._update_progress(item['current'], item['total'])
+                elif item_type == 'complete':
+                    self._on_send_complete(item)
+                    
+                self.ui_queue.task_done()
+        except queue.Empty:
+            pass
+        
+        self.root.after(100, self._process_ui_queue)
+    
+    def _update_progress(self, current: int, total: int):
+        """Обновляет прогресс"""
+        self.counter_label.config(text=f"{current}/{total}")
+        if total > 0:
+            progress = (current / total) * 100
+            self.progress_var.set(progress)
+    
+    def _on_send_complete(self, item: dict):
+        """Обработка завершения рассылки"""
+        self.send_button.config(state=tk.NORMAL)
+        self.pause_button.config(state=tk.DISABLED)
+        self.cancel_button.config(state=tk.DISABLED)
+        self.preview_button.config(state=tk.NORMAL)
+        
+        success = item.get('success_count', 0)
+        failed = item.get('failed_count', 0)
+        total = item.get('total', 0)
+        cancelled = item.get('cancelled', False)
+        
+        if cancelled:
+            status = f"Рассылка отменена. Отправлено: {success}/{total}"
+            self._log_message(status, "WARNING")
+        else:
+            status = f"Рассылка завершена: {success} отправлено, {failed} ошибок"
+            self._log_message(status, "INFO")
+            messagebox.showinfo("Завершено", f"Рассылка завершена!\nОтправлено: {success}/{total}\nОшибок: {failed}")
+    
+    def _start_send(self):
+        """Запуск рассылки"""
+        try:
+            # Валидация
+            if not self._validate_settings():
+                return
+            
+            # Чтение данных
+            recipients = ExcelService.read_recipients(self.settings_frame.excel_path.get())
+            
+            if not recipients:
+                messagebox.showerror("Ошибка", "Нет данных для рассылки")
+                return
+            
+            # Создание конфига
+            config = EmailConfig(
+                account=self.settings_frame.email_account.get(),
+                subject=self.settings_frame.email_subject.get(),
+                body=self.settings_frame.get_email_body(),
+                folder_paths=[
+                    self.settings_frame.folder_path_1.get(),
+                    self.settings_frame.folder_path_2.get(),
+                    self.settings_frame.folder_path_3.get()
+                ],
+                thread_count=self.settings_frame.thread_count.get()
+            )
+            
+            # Создание сервиса
+            self.email_service = EmailService(config)
+            
+            # Сброс состояния
+            self.is_cancelled = False
+            self.is_paused = False
+            
+            # Блокировка кнопок
+            self.send_button.config(state=tk.DISABLED)
+            self.pause_button.config(state=tk.NORMAL)
+            self.cancel_button.config(state=tk.NORMAL)
+            self.preview_button.config(state=tk.DISABLED)
+            
+            # Запуск в потоке
+            self.total_emails = len(recipients)
+            self._update_progress(0, self.total_emails)
+            self._log_message(f"Подготовка к отправке: 0/{self.total_emails}")
+            
+            threading.Thread(
+                target=self._send_emails_thread, 
+                args=(recipients,), 
+                daemon=True
+            ).start()
+            
+        except Exception as e:
+            self._restore_buttons()
+            self._log_message(f"Критическая ошибка: {str(e)}", "ERROR")
+            messagebox.showerror("Ошибка", f"Произошла ошибка: {str(e)}")
+    
+    def _validate_settings(self) -> bool:
+        """Проверяет настройки"""
+        if not self.settings_frame.email_account.get():
+            messagebox.showerror("Ошибка", "Выберите аккаунт Outlook")
+            return False
+        
+        if not self.settings_frame.excel_path.get():
+            messagebox.showerror("Ошибка", "Укажите Excel файл")
+            return False
+        
+        folders = [
+            self.settings_frame.folder_path_1.get(),
+            self.settings_frame.folder_path_2.get(),
+            self.settings_frame.folder_path_3.get()
+        ]
+        if not any(folders):
+            messagebox.showerror("Ошибка", "Укажите хотя бы одну папку с файлами")
+            return False
+        
+        return True
+    
+    def _send_emails_thread(self, recipients: list):
+        """Поток отправки писем"""
+        try:
+            def progress_callback(current: int, total: int, result):
+                self.ui_queue.put({
+                    'type': 'progress',
+                    'current': current,
+                    'total': total
+                })
+            
+            success, failed = self.email_service.send_bulk(
+                recipients, 
+                progress_callback=progress_callback
+            )
+            
+            self.ui_queue.put({
+                'type': 'complete',
+                'success_count': success,
+                'failed_count': failed,
+                'total': len(recipients),
+                'cancelled': self.email_service.is_cancelled
+            })
+            
+        except Exception as e:
+            self.ui_queue.put({
+                'type': 'status',
+                'message': f"Критическая ошибка в потоке: {str(e)}",
+                'level': 'ERROR'
+            })
+    
+    def _toggle_pause(self):
+        """Пауза/продолжение"""
+        if self.email_service:
+            self.is_paused = self.email_service.toggle_pause()
+            if self.is_paused:
+                self.pause_button.config(text="Продолжить")
+                self._log_message("Рассылка приостановлена", "WARNING")
+            else:
+                self.pause_button.config(text="Пауза")
+                self._log_message("Рассылка продолжена", "INFO")
+    
+    def _cancel_send(self):
+        """Отмена рассылки"""
+        self.is_cancelled = True
+        if self.email_service:
+            self.email_service.cancel()
+        self._log_message("Рассылка отменена пользователем", "WARNING")
+    
+    def _preview_email(self):
+        """Предварительный просмотр"""
+        try:
+            if not self._validate_settings():
+                return
+            
+            recipients = ExcelService.read_recipients(self.settings_frame.excel_path.get())
+            
+            if not recipients:
+                messagebox.showerror("Ошибка", "Нет данных для просмотра")
+                return
+            
+            recipient = random.choice(recipients)
+            
+            if not recipient.email:
+                messagebox.showerror("Ошибка", "Нет email для просмотра")
+                return
+            
+            config = EmailConfig(
+                account=self.settings_frame.email_account.get(),
+                subject=self.settings_frame.email_subject.get(),
+                body=self.settings_frame.get_email_body(),
+                folder_paths=[
+                    self.settings_frame.folder_path_1.get(),
+                    self.settings_frame.folder_path_2.get(),
+                    self.settings_frame.folder_path_3.get()
+                ]
+            )
+            
+            email_service = EmailService(config)
+            email_service.preview_email(recipient)
+            
+            self._log_message(f"Предварительный просмотр для: {recipient.email}")
+            
+        except Exception as e:
+            self._log_message(f"Ошибка预览: {str(e)}", "ERROR")
+            messagebox.showerror("Ошибка", f"Произошла ошибка: {str(e)}")
+    
+    def _restore_buttons(self):
+        """Восстанавливает кнопки"""
+        self.send_button.config(state=tk.NORMAL)
+        self.pause_button.config(state=tk.DISABLED)
+        self.cancel_button.config(state=tk.DISABLED)
+        self.preview_button.config(state=tk.NORMAL)
+    
+    def _load_settings(self):
+        """Загружает сохранённые настройки"""
+        settings = self.settings_manager.load()
+        
+        if not settings:
+            # Устанавливаем значения по умолчанию
+            self.settings_frame.email_subject.set(self.default_subject)
+            self.settings_frame.set_email_body(self.default_body)
+            return
+        
+        if 'excel_path' in settings:
+            self.settings_frame.excel_path.set(settings['excel_path'])
+        if 'email_account' in settings:
+            self.settings_frame.email_account.set(settings['email_account'])
+        if 'thread_count' in settings:
+            self.settings_frame.thread_count.set(settings['thread_count'])
+        if 'email_subject' in settings:
+            self.settings_frame.email_subject.set(settings['email_subject'])
+        if 'email_body' in settings:
+            self.settings_frame.set_email_body(settings['email_body'])
+        if 'folder_path_1' in settings:
+            self.settings_frame.folder_path_1.set(settings['folder_path_1'])
+            self.folder_paths[1] = settings['folder_path_1']
+        if 'folder_path_2' in settings:
+            self.settings_frame.folder_path_2.set(settings['folder_path_2'])
+            self.folder_paths[2] = settings['folder_path_2']
+        if 'folder_path_3' in settings:
+            self.settings_frame.folder_path_3.set(settings['folder_path_3'])
+            self.folder_paths[3] = settings['folder_path_3']
+        
+        self._log_message("Настройки загружены")
+    
+    def _save_settings(self):
+        """Сохраняет настройки"""
+        settings = {
+            'excel_path': self.settings_frame.excel_path.get(),
+            'email_account': self.settings_frame.email_account.get(),
+            'thread_count': self.settings_frame.thread_count.get(),
+            'email_subject': self.settings_frame.email_subject.get(),
+            'email_body': self.settings_frame.get_email_body(),
+            'folder_path_1': self.settings_frame.folder_path_1.get(),
+            'folder_path_2': self.settings_frame.folder_path_2.get(),
+            'folder_path_3': self.settings_frame.folder_path_3.get()
+        }
+        
+        self.settings_manager.save(settings)
+    
+    def on_closing(self):
+        """Обработчик закрытия окна"""
+        self._save_settings()
+        
+        if self.email_service and self.email_service.is_cancelled:
+            self.email_service.cancel()
+        
+        self.root.destroy()
