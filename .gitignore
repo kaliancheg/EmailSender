@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.log
+settings.json
+*.ini
+
+# Excel и временные файлы
+*.tmp
+~$*.xlsx
+
+# Исключения для проекта
+!.gitignore
