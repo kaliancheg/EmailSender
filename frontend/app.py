@@ -505,7 +505,11 @@ class EmailSenderApp:
             sender_name=self.smtp_settings['sender_name']
         )
 
-        self.smtp_service = SMTPService(config)
+        # Передаём количество потоков из настроек
+        self.smtp_service = SMTPService(
+            config, 
+            thread_count=self.settings_frame.thread_count.get()
+        )
 
         # Подготовка очереди писем
         self.email_queue = []

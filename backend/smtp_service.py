@@ -9,7 +9,9 @@ from email import encoders
 from pathlib import Path
 from typing import List, Optional, Callable
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import threading
 
 from models.smtp_models import SMTPConfig, QueuedEmail, EmailStatus, SendStatistics
 
@@ -19,20 +21,35 @@ logger = logging.getLogger("email_sender")
 class SMTPService:
     """Сервис для отправки email через SMTP"""
     
-    def __init__(self, config: SMTPConfig):
+    def __init__(self, config: SMTPConfig, thread_count: int = 3):
         """
         Инициализация SMTP сервиса.
         
         Args:
             config: Конфигурация SMTP сервера
+            thread_count: Количество потоков для отправки (по умолчанию 3)
         """
         self.config = config
+        self.thread_count = min(max(thread_count, 1), 10)  # Ограничение 1-10
         self.is_cancelled = False
         self.is_paused = False
+        self._pause_lock = threading.Lock()
     
     def send_email(self, queued_email: QueuedEmail) -> bool:
         """
-        Отправляет одно письмо.
+        Отправляет одно письмо (потокобезопасная версия).
+
+        Args:
+            queued_email: Письмо для отправки
+
+        Returns:
+            True если успешно
+        """
+        return self._send_single_email(queued_email)
+    
+    def _send_single_email(self, queued_email: QueuedEmail) -> bool:
+        """
+        Отправляет одно письмо (внутренний метод для потоков).
 
         Args:
             queued_email: Письмо для отправки
@@ -162,12 +179,12 @@ class SMTPService:
         progress_callback: Optional[Callable[[int, int, QueuedEmail], None]] = None
     ) -> SendStatistics:
         """
-        Массовая отправка писем.
-        
+        Массовая многопоточная отправка писем.
+
         Args:
             emails: Список писем для отправки
             progress_callback: Callback (current, total, email)
-            
+
         Returns:
             Статистика отправки
         """
@@ -176,39 +193,61 @@ class SMTPService:
         
         stats = SendStatistics(total=len(emails))
         
-        logger.info(f"Начало SMTP рассылки: {len(emails)} писем")
+        logger.info(f"Начало SMTP рассылки: {len(emails)} писем, потоков: {self.thread_count}")
+
+        # Ограничиваем количество потоков количеством писем
+        max_workers = min(self.thread_count, len(emails))
         
-        for i, email in enumerate(emails):
-            if self.is_cancelled:
-                logger.warning("Рассылка отменена пользователем")
-                break
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Создаём задачи для каждого письма
+            future_to_email = {
+                executor.submit(self._send_single_email, email): email 
+                for email in emails
+            }
             
-            # Пауза
-            while self.is_paused and not self.is_cancelled:
-                import time
-                time.sleep(1)
-            
-            # Отправка
-            success = self.send_email(email)
-            
-            if success:
-                stats.sent += 1
-            else:
-                stats.failed += 1
+            # Обрабатываем результаты по мере завершения
+            for i, future in enumerate(as_completed(future_to_email)):
+                if self.is_cancelled:
+                    logger.warning("Рассылка отменена пользователем")
+                    # Отменяем оставшиеся задачи
+                    for f in future_to_email:
+                        f.cancel()
+                    break
                 
-                # Попытка повтора
-                if email.can_retry:
-                    email.retry_count += 1
-                    email.status = EmailStatus.RETRY
-                    stats.retry += 1
-                    logger.warning(f"Попытка повтора {email.retry_count}/{email.max_retries} для {email.recipient_email}")
-            
-            # Обновление статистики
-            stats.pending = len(emails) - stats.sent - stats.failed
-            
-            if progress_callback:
-                progress_callback(i + 1, len(emails), email)
-        
+                # Пауза
+                while self.is_paused and not self.is_cancelled:
+                    import time
+                    time.sleep(0.5)
+                
+                email = future_to_email[future]
+                
+                try:
+                    success = future.result()
+                    
+                    if success:
+                        stats.sent += 1
+                    else:
+                        stats.failed += 1
+                        
+                        # Попытка повтора
+                        if email.can_retry:
+                            email.retry_count += 1
+                            email.status = EmailStatus.RETRY
+                            stats.retry += 1
+                            logger.warning(f"Попытка повтора {email.retry_count}/{email.max_retries} для {email.recipient_email}")
+                    
+                    # Обновление статистики
+                    stats.pending = len(emails) - stats.sent - stats.failed
+                    
+                    if progress_callback:
+                        progress_callback(i + 1, len(emails), email)
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
+                    stats.failed += 1
+                    if progress_callback:
+                        progress_callback(i + 1, len(emails), email)
+
         return stats
     
     def cancel(self):
