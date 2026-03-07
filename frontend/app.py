@@ -67,8 +67,12 @@ class EmailSenderApp:
 
         # UI
         self._setup_ui()
-        self._load_outlook_accounts()
-        self._load_settings()
+        self._load_settings()  # Загружаем настройки ДО инициализации UI
+        self._update_mode_ui()  # Обновляем состояние кнопки SMTP
+        
+        # Загружаем аккаунты Outlook только если выбран режим Outlook
+        if self.send_mode.get() == "outlook":
+            self._load_outlook_accounts()
 
         # Обработка очереди UI
         self.root.after(100, self._process_ui_queue)
@@ -235,6 +239,10 @@ class EmailSenderApp:
         """Обработчик изменения режима отправки"""
         self._update_mode_ui()
         self._log_message(f"Режим отправки: {self.send_mode.get()}")
+        
+        # Загружаем аккаунты Outlook только при переключении на Outlook
+        if self.send_mode.get() == "outlook":
+            self._load_outlook_accounts()
 
     def _update_mode_ui(self):
         """Обновляет UI в зависимости от режима"""
