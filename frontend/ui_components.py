@@ -140,7 +140,7 @@ class SettingsFrame(ttk.LabelFrame, ContextMenuMixin):
         
         # Текст письма
         ttk.Label(self, text="Текст письма:").grid(row=7, column=0, sticky=tk.NW, pady=5)
-        self.body_text = tk.Text(self, height=8, width=50)
+        self.body_text = tk.Text(self, height=8, width=50, wrap=tk.WORD)
         self.body_text.grid(row=7, column=1, padx=5, pady=5, columnspan=2, sticky=(tk.W, tk.E))
         
         # Контекстное меню
