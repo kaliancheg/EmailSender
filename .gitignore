@@ -21,3 +21,13 @@ env/
 
 # Старый монолитный файл
 mail_sender.py
+
+# PyInstaller
+build/
+dist/
+*.spec
+!build_config/*.spec
+
+# Временные файлы
+*.pdb
+*.manifest
