@@ -19,9 +19,6 @@ env/
 # Исключения для проекта
 !.gitignore
 
-# Старый монолитный файл
-mail_sender.py
-
 # PyInstaller
 build/
 dist/
