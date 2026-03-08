@@ -242,9 +242,8 @@ class SMTPService:
 
                     # Обновление статистики: sending = все, что ещё не завершено
                     stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
-                    stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
-                    # sending = total - sent - failed - pending - retry
-                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending - stats.retry
+                    # sending = total - sent - failed - pending
+                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
 
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
@@ -255,8 +254,7 @@ class SMTPService:
                     email.status = EmailStatus.FAILED
                     # Обновление статистики
                     stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
-                    stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
-                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending - stats.retry
+                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
 

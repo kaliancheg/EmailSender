@@ -78,7 +78,6 @@ class SendStatistics:
     sent: int = 0
     failed: int = 0
     pending: int = 0
-    retry: int = 0
     sending: int = 0  # В процессе отправки
 
     @property

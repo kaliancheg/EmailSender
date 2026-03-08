@@ -373,7 +373,6 @@ class EmailSenderApp:
                     sent=0,
                     failed=0,
                     pending=count,
-                    retry=0,
                     sending=0
                 )
             })
@@ -452,8 +451,7 @@ class EmailSenderApp:
             f"📤 В процессе: {stats.sending} | "
             f"✅ Отправлено: {stats.sent} | "
             f"❌ Ошибка: {stats.failed} | "
-            f"🕐 В очереди: {stats.pending} | "
-            f"🔄 Повтор: {stats.retry}"
+            f"🕐 В очереди: {stats.pending}"
         )
         self.stats_label.config(text=text)
 
@@ -463,8 +461,7 @@ class EmailSenderApp:
             f"📤 В процессе: 0 | "
             f"✅ Отправлено: 0 | "
             f"❌ Ошибка: 0 | "
-            f"🕐 В очереди: 0 | "
-            f"🔄 Повтор: 0"
+            f"🕐 В очереди: 0"
         )
         self.stats_label.config(text=text)
 
@@ -648,7 +645,6 @@ class EmailSenderApp:
             sent=0,
             failed=0,
             pending=len(self.email_queue),
-            retry=0,
             sending=0
         )
         self.ui_queue.put({
@@ -745,7 +741,6 @@ class EmailSenderApp:
                 sent=stats.sent,
                 failed=stats.failed,
                 pending=0,
-                retry=0,
                 sending=0
             )
             self.ui_queue.put({
