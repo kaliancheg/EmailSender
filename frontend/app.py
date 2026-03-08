@@ -80,7 +80,8 @@ class EmailSenderApp:
         self._setup_ui()
         self._load_settings()  # Загружаем настройки ДО инициализации UI
         self._update_mode_ui()  # Обновляем состояние кнопки SMTP
-        
+        self._init_stats_display()  # Инициализируем статистику текстовыми метками
+
         # Outlook НЕ загружаем при инициализации - только при переключении на Outlook режим
 
         # Обработка очереди UI
@@ -363,6 +364,19 @@ class EmailSenderApp:
                 foreground="green" if count > 0 else "red"
             )
             self._log_message(f"Загружено {count} получателей из Excel")
+            
+            # Обновляем статистику: все письма в очереди
+            self.ui_queue.put({
+                'type': 'stats',
+                'stats': SendStatistics(
+                    total=count,
+                    sent=0,
+                    failed=0,
+                    pending=count,
+                    retry=0,
+                    sending=0
+                )
+            })
         except Exception as e:
             self.recipients_count_label.config(
                 text="📋 Писем в файле: ошибка",
@@ -440,6 +454,17 @@ class EmailSenderApp:
             f"❌ Ошибка: {stats.failed} | "
             f"🕐 В очереди: {stats.pending} | "
             f"🔄 Повтор: {stats.retry}"
+        )
+        self.stats_label.config(text=text)
+
+    def _init_stats_display(self):
+        """Инициализирует отображение статистики текстовыми метками"""
+        text = (
+            f"📤 В процессе: 0 | "
+            f"✅ Отправлено: 0 | "
+            f"❌ Ошибка: 0 | "
+            f"🕐 В очереди: 0 | "
+            f"🔄 Повтор: 0"
         )
         self.stats_label.config(text=text)
 
