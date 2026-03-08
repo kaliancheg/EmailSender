@@ -435,11 +435,11 @@ class EmailSenderApp:
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
         text = (
-            f"📤 {stats.sending} | "
-            f"✅ {stats.sent} | "
-            f"❌ {stats.failed} | "
-            f"🕐 {stats.pending} | "
-            f"🔄 {stats.retry}"
+            f"📤 В процессе: {stats.sending} | "
+            f"✅ Отправлено: {stats.sent} | "
+            f"❌ Ошибка: {stats.failed} | "
+            f"🕐 В очереди: {stats.pending} | "
+            f"🔄 Повтор: {stats.retry}"
         )
         self.stats_label.config(text=text)
 
