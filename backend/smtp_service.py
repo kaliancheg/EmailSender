@@ -240,10 +240,11 @@ class SMTPService:
                         email.status = EmailStatus.FAILED
                         logger.warning(f"Ошибка отправки для {email.recipient_email}: {email.error_message}")
 
-                    # Обновление статистики на основе реальных статусов
-                    stats.sending = sum(1 for e in emails if e.status == EmailStatus.SENDING)
+                    # Обновление статистики: sending = все, что ещё не завершено
                     stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
                     stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
+                    # sending = total - sent - failed - pending - retry
+                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending - stats.retry
 
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
@@ -252,6 +253,10 @@ class SMTPService:
                     logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
                     stats.failed += 1
                     email.status = EmailStatus.FAILED
+                    # Обновление статистики
+                    stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
+                    stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
+                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending - stats.retry
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
 

@@ -434,6 +434,9 @@ class EmailSenderApp:
 
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
+        # Отладка: выводим значения в лог
+        self._log_message(f"Stats: 📤{stats.sending} ✅{stats.sent} ❌{stats.failed} 🕐{stats.pending} 🔄{stats.retry}", "DEBUG")
+        
         text = (
             f"📤 {stats.sending} | "
             f"✅ {stats.sent} | "
@@ -616,6 +619,20 @@ class EmailSenderApp:
             self.email_queue.append(queued_email)
 
         self._log_message(f"Подготовка к отправке через SMTP: 0/{self.total_emails}")
+
+        # Инициализация статистики в начале рассылки
+        initial_stats = SendStatistics(
+            total=len(self.email_queue),
+            sent=0,
+            failed=0,
+            pending=len(self.email_queue),
+            retry=0,
+            sending=0
+        )
+        self.ui_queue.put({
+            'type': 'stats',
+            'stats': initial_stats
+        })
 
         threading.Thread(
             target=self._send_smtp_thread,
