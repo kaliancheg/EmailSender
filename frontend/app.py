@@ -434,9 +434,6 @@ class EmailSenderApp:
 
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
-        # Отладка: выводим значения в лог
-        self._log_message(f"Stats: 📤{stats.sending} ✅{stats.sent} ❌{stats.failed} 🕐{stats.pending} 🔄{stats.retry}", "DEBUG")
-        
         text = (
             f"📤 {stats.sending} | "
             f"✅ {stats.sent} | "
