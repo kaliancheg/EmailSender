@@ -435,6 +435,7 @@ class EmailSenderApp:
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
         text = (
+            f"📤 {stats.sending} | "
             f"✅ {stats.sent} | "
             f"❌ {stats.failed} | "
             f"🕐 {stats.pending} | "
@@ -673,6 +674,19 @@ class EmailSenderApp:
                     'current': current,
                     'total': total
                 })
+                
+                # Обновляем статистику в реальном времени
+                stats = SendStatistics(
+                    total=total,
+                    sent=sum(1 for e in self.email_queue if e.status == EmailStatus.SENT),
+                    failed=sum(1 for e in self.email_queue if e.status == EmailStatus.FAILED),
+                    pending=sum(1 for e in self.email_queue if e.status == EmailStatus.PENDING),
+                    retry=sum(1 for e in self.email_queue if e.status == EmailStatus.RETRY)
+                )
+                self.ui_queue.put({
+                    'type': 'stats',
+                    'stats': stats
+                })
 
             # Запускаем отправку
             stats = self.smtp_service.send_bulk(
@@ -693,6 +707,19 @@ class EmailSenderApp:
             # Копируем все ошибки в общий список
             with self.failed_emails_lock:
                 self.failed_emails.extend(failed_list)
+
+            # Финальное обновление статистики
+            final_stats = SendStatistics(
+                total=len(self.email_queue),
+                sent=stats.sent,
+                failed=stats.failed,
+                pending=0,
+                retry=0
+            )
+            self.ui_queue.put({
+                'type': 'stats',
+                'stats': final_stats
+            })
 
             self.ui_queue.put({
                 'type': 'complete',

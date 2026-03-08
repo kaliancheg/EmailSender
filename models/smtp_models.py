@@ -79,14 +79,15 @@ class SendStatistics:
     failed: int = 0
     pending: int = 0
     retry: int = 0
-    
+    sending: int = 0  # В процессе отправки
+
     @property
     def progress_percent(self) -> float:
         """Процент выполнения"""
         if self.total == 0:
             return 0.0
         return ((self.sent + self.failed) / self.total) * 100
-    
+
     @property
     def success_rate(self) -> float:
         """Процент успешных"""

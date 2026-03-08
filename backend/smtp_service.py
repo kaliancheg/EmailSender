@@ -197,21 +197,21 @@ class SMTPService:
         """
         self.is_cancelled = False
         self.is_paused = False
-        
+
         stats = SendStatistics(total=len(emails))
-        
+
         logger.info(f"Начало SMTP рассылки: {len(emails)} писем, потоков: {self.thread_count}")
 
         # Ограничиваем количество потоков количеством писем
         max_workers = min(self.thread_count, len(emails))
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Создаём задачи для каждого письма
             future_to_email = {
-                executor.submit(self._send_single_email, email): email 
+                executor.submit(self._send_single_email, email): email
                 for email in emails
             }
-            
+
             # Обрабатываем результаты по мере завершения
             for i, future in enumerate(as_completed(future_to_email)):
                 if self.is_cancelled:
@@ -220,27 +220,30 @@ class SMTPService:
                     for f in future_to_email:
                         f.cancel()
                     break
-                
+
                 # Пауза
                 while self.is_paused and not self.is_cancelled:
                     import time
                     time.sleep(0.5)
-                
+
                 email = future_to_email[future]
-                
+
                 try:
                     success = future.result()
 
                     if success:
                         stats.sent += 1
+                        email.status = EmailStatus.SENT
                     else:
                         stats.failed += 1
                         # Сразу устанавливаем FAILED без повторных попыток
                         email.status = EmailStatus.FAILED
                         logger.warning(f"Ошибка отправки для {email.recipient_email}: {email.error_message}")
 
-                    # Обновление статистики
-                    stats.pending = len(emails) - stats.sent - stats.failed
+                    # Обновление статистики на основе реальных статусов
+                    stats.sending = sum(1 for e in emails if e.status == EmailStatus.SENDING)
+                    stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
+                    stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
 
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email)
@@ -248,6 +251,7 @@ class SMTPService:
                 except Exception as e:
                     logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
                     stats.failed += 1
+                    email.status = EmailStatus.FAILED
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email)
 
