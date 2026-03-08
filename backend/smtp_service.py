@@ -230,25 +230,21 @@ class SMTPService:
                 
                 try:
                     success = future.result()
-                    
+
                     if success:
                         stats.sent += 1
                     else:
                         stats.failed += 1
-                        
-                        # Попытка повтора
-                        if email.can_retry:
-                            email.retry_count += 1
-                            email.status = EmailStatus.RETRY
-                            stats.retry += 1
-                            logger.warning(f"Попытка повтора {email.retry_count}/{email.max_retries} для {email.recipient_email}")
-                    
+                        # Сразу устанавливаем FAILED без повторных попыток
+                        email.status = EmailStatus.FAILED
+                        logger.warning(f"Ошибка отправки для {email.recipient_email}: {email.error_message}")
+
                     # Обновление статистики
                     stats.pending = len(emails) - stats.sent - stats.failed
-                    
+
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email)
-                        
+
                 except Exception as e:
                     logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
                     stats.failed += 1
