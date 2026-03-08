@@ -5,6 +5,8 @@ from tkinter import ttk, filedialog, messagebox
 import queue
 import threading
 import random
+import os
+import subprocess
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -52,6 +54,11 @@ class EmailSenderApp:
         self.total_emails = 0
         self.sent_count = 0
         self.failed_count = 0
+
+        # Список email-адресов с ошибками отправки
+        self.failed_emails: List[str] = []
+        self.failed_emails_lock = threading.Lock()
+        self.failed_emails_file_path: str = None  # Путь к файлу с ошибками (создаётся один раз за сессию)
 
         # Очередь писем (для SMTP)
         self.email_queue: List[QueuedEmail] = []
@@ -208,7 +215,14 @@ class EmailSenderApp:
             command=self._cancel_send, state=tk.DISABLED
         )
         self.cancel_button.pack(side=tk.LEFT)
-        
+
+        # Кнопка просмотра ошибок
+        self.errors_button = ttk.Button(
+            button_frame, text="📋 Ошибки",
+            command=self._open_failed_emails_file, state=tk.DISABLED
+        )
+        self.errors_button.pack(side=tk.LEFT, padx=(5, 0))
+
         # Статистика (для SMTP)
         self.stats_frame = ttk.Frame(control_frame)
         self.stats_frame.pack(fill=tk.X, pady=(5, 0))
@@ -436,6 +450,9 @@ class EmailSenderApp:
         self.preview_button.config(state=tk.NORMAL)
         self.refresh_count_button.config(state=tk.NORMAL)
 
+        # Активируем кнопку ошибок если есть неудачи
+        self.errors_button.config(state=tk.NORMAL if self.failed_emails else tk.DISABLED)
+
         success = item.get('success_count', 0)
         failed = item.get('failed_count', 0)
         total = item.get('total', 0)
@@ -501,6 +518,10 @@ class EmailSenderApp:
             # Сброс состояния
             self.is_cancelled = False
             self.is_paused = False
+            # Сброс списка ошибок и пути к файлу
+            with self.failed_emails_lock:
+                self.failed_emails.clear()
+            self.failed_emails_file_path = None
 
             # Блокировка кнопок
             self.send_button.config(state=tk.DISABLED)
@@ -604,6 +625,8 @@ class EmailSenderApp:
     def _send_outlook_thread(self, recipients: list):
         """Поток отправки через Outlook"""
         try:
+            failed_list = []
+
             def progress_callback(current: int, total: int, result):
                 self.ui_queue.put({
                     'type': 'progress',
@@ -611,10 +634,18 @@ class EmailSenderApp:
                     'total': total
                 })
 
+                # Собираем email с ошибками в локальный список
+                if not result.success:
+                    failed_list.append(result.email)
+
             success, failed = self.email_service.send_bulk(
                 recipients,
                 progress_callback=progress_callback
             )
+
+            # После завершения send_bulk копируем все ошибки в общий список
+            with self.failed_emails_lock:
+                self.failed_emails.extend(failed_list)
 
             self.ui_queue.put({
                 'type': 'complete',
@@ -634,41 +665,34 @@ class EmailSenderApp:
     def _send_smtp_thread(self, recipients: list):
         """Поток отправки через SMTP"""
         try:
+            failed_list = []
+
             def progress_callback(current: int, total: int, email: QueuedEmail):
                 self.ui_queue.put({
                     'type': 'progress',
                     'current': current,
                     'total': total
                 })
-                
-                # Обновление статистики
-                stats = SendStatistics(
-                    total=total,
-                    sent=sum(1 for e in self.email_queue if e.status == EmailStatus.SENT),
-                    failed=sum(1 for e in self.email_queue if e.status == EmailStatus.FAILED),
-                    pending=sum(1 for e in self.email_queue if e.status == EmailStatus.PENDING),
-                    retry=sum(1 for e in self.email_queue if e.status == EmailStatus.RETRY)
-                )
-                self.ui_queue.put({'type': 'stats', 'stats': stats})
-                
-                # Логирование
-                if email.status == EmailStatus.SENT:
-                    self.ui_queue.put({
-                        'type': 'log',
-                        'message': f"✅ Отправлено: {email.recipient_email}",
-                        'level': 'INFO'
-                    })
-                elif email.status == EmailStatus.FAILED:
+
+            # Запускаем отправку
+            stats = self.smtp_service.send_bulk(
+                self.email_queue,
+                progress_callback=progress_callback
+            )
+
+            # После завершения собираем все письма с ошибками
+            for email in self.email_queue:
+                if email.status == EmailStatus.FAILED:
+                    failed_list.append(email.recipient_email)
                     self.ui_queue.put({
                         'type': 'log',
                         'message': f"❌ Ошибка: {email.recipient_email} - {email.error_message}",
                         'level': 'ERROR'
                     })
 
-            stats = self.smtp_service.send_bulk(
-                self.email_queue,
-                progress_callback=progress_callback
-            )
+            # Копируем все ошибки в общий список
+            with self.failed_emails_lock:
+                self.failed_emails.extend(failed_list)
 
             self.ui_queue.put({
                 'type': 'complete',
@@ -786,6 +810,60 @@ class EmailSenderApp:
         self.cancel_button.config(state=tk.DISABLED)
         self.preview_button.config(state=tk.NORMAL)
         self.refresh_count_button.config(state=tk.NORMAL)
+        # Кнопка ошибок активна только если есть ошибки
+        self.errors_button.config(state=tk.NORMAL if self.failed_emails else tk.DISABLED)
+
+    def _save_failed_emails_to_file(self):
+        """Сохраняет список email-адресов с ошибками в текстовый файл (один раз за сессию)"""
+        if not self.failed_emails:
+            return None
+        
+        # Если файл уже создан, возвращаем его путь
+        if self.failed_emails_file_path and os.path.exists(self.failed_emails_file_path):
+            return self.failed_emails_file_path
+
+        # Формируем имя файла с датой и временем
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"failed_emails_{timestamp}.txt"
+        filepath = os.path.join(os.getcwd(), filename)
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("Список e-mail адресов с ошибками отправки\n")
+                f.write(f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n")
+                f.write(f"Всего ошибок: {len(self.failed_emails)}\n")
+                f.write("=" * 50 + "\n\n")
+                for email in self.failed_emails:
+                    f.write(f"{email}\n")
+            
+            # Сохраняем путь к файлу
+            self.failed_emails_file_path = filepath
+            
+            self._log_message(f"Список ошибок сохранён: {filename}")
+            return filepath
+        
+        except Exception as e:
+            self._log_message(f"Ошибка сохранения файла ошибок: {str(e)}", "ERROR")
+            return None
+
+    def _open_failed_emails_file(self):
+        """Открывает файл со списком email-адресов с ошибками"""
+        if not self.failed_emails:
+            messagebox.showinfo("Информация", "Нет email-адресов с ошибками отправки")
+            return
+        
+        # Сохраняем файл (или получаем путь к существующему)
+        filepath = self._save_failed_emails_to_file()
+        
+        if filepath and os.path.exists(filepath):
+            # Открываем файл в текстовом редакторе по умолчанию
+            try:
+                filename = os.path.basename(filepath)
+                os.startfile(filepath)
+                self._log_message(f"Открыт файл с ошибками: {filename}")
+            except Exception as e:
+                self._log_message(f"Ошибка открытия файла: {str(e)}", "ERROR")
+                messagebox.showerror("Ошибка", f"Не удалось открыть файл:\n{filepath}")
 
     def _load_settings(self):
         """Загружает сохранённые настройки"""
