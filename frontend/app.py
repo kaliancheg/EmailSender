@@ -668,21 +668,13 @@ class EmailSenderApp:
         try:
             failed_list = []
 
-            def progress_callback(current: int, total: int, email: QueuedEmail):
+            def progress_callback(current: int, total: int, email: QueuedEmail, stats: SendStatistics):
                 self.ui_queue.put({
                     'type': 'progress',
                     'current': current,
                     'total': total
                 })
-                
-                # Обновляем статистику в реальном времени
-                stats = SendStatistics(
-                    total=total,
-                    sent=sum(1 for e in self.email_queue if e.status == EmailStatus.SENT),
-                    failed=sum(1 for e in self.email_queue if e.status == EmailStatus.FAILED),
-                    pending=sum(1 for e in self.email_queue if e.status == EmailStatus.PENDING),
-                    retry=sum(1 for e in self.email_queue if e.status == EmailStatus.RETRY)
-                )
+                # Обновление статистики в реальном времени
                 self.ui_queue.put({
                     'type': 'stats',
                     'stats': stats
@@ -714,7 +706,8 @@ class EmailSenderApp:
                 sent=stats.sent,
                 failed=stats.failed,
                 pending=0,
-                retry=0
+                retry=0,
+                sending=0
             )
             self.ui_queue.put({
                 'type': 'stats',

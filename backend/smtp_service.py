@@ -183,14 +183,14 @@ class SMTPService:
     def send_bulk(
         self,
         emails: List[QueuedEmail],
-        progress_callback: Optional[Callable[[int, int, QueuedEmail], None]] = None
+        progress_callback: Optional[Callable[[int, int, QueuedEmail, SendStatistics], None]] = None
     ) -> SendStatistics:
         """
         Массовая многопоточная отправка писем.
 
         Args:
             emails: Список писем для отправки
-            progress_callback: Callback (current, total, email)
+            progress_callback: Callback (current, total, email, stats)
 
         Returns:
             Статистика отправки
@@ -246,14 +246,14 @@ class SMTPService:
                     stats.retry = sum(1 for e in emails if e.status == EmailStatus.RETRY)
 
                     if progress_callback:
-                        progress_callback(i + 1, len(emails), email)
+                        progress_callback(i + 1, len(emails), email, stats)
 
                 except Exception as e:
                     logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
                     stats.failed += 1
                     email.status = EmailStatus.FAILED
                     if progress_callback:
-                        progress_callback(i + 1, len(emails), email)
+                        progress_callback(i + 1, len(emails), email, stats)
 
         return stats
     
