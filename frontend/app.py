@@ -536,6 +536,8 @@ class EmailSenderApp:
                 return
 
             # Обновляем счётчик перед отправкой
+            current_mode = self.send_mode.get()
+            self._log_message(f"Режим отправки: {current_mode}")
             self._log_message(f"Подготовлено к отправке: {len(recipients)} писем")
 
             # Сброс состояния
@@ -557,9 +559,11 @@ class EmailSenderApp:
             self.total_emails = len(recipients)
             self._update_progress(0, self.total_emails)
 
-            if self.send_mode.get() == "outlook":
+            if current_mode == "outlook":
+                self._log_message("Запуск отправки через Outlook...")
                 self._start_outlook_send(recipients)
             else:
+                self._log_message("Запуск отправки через SMTP...")
                 self._start_smtp_send(recipients)
 
         except Exception as e:
@@ -954,9 +958,14 @@ class EmailSenderApp:
         if 'smtp_settings' in settings:
             self.smtp_settings = settings['smtp_settings']
         
-        # Загрузка режима отправки
+        # Загрузка режима отправки (по умолчанию SMTP)
         if 'send_mode' in settings:
             self.send_mode.set(settings['send_mode'])
+        else:
+            self.send_mode.set("smtp")  # По умолчанию SMTP
+        
+        # Обновляем UI после загрузки режима
+        self._update_mode_ui()
 
         self._log_message("Настройки загружены")
         
