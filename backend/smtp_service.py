@@ -20,11 +20,11 @@ logger = logging.getLogger("email_sender")
 
 class SMTPService:
     """Сервис для отправки email через SMTP"""
-    
+
     def __init__(self, config: SMTPConfig, thread_count: int = 3, delay_between_emails: float = 0.0):
         """
         Инициализация SMTP сервиса.
-        
+
         Args:
             config: Конфигурация SMTP сервера
             thread_count: Количество потоков для отправки (по умолчанию 3)
@@ -36,6 +36,7 @@ class SMTPService:
         self.is_cancelled = False
         self.is_paused = False
         self._pause_lock = threading.Lock()
+        self._status_lock = threading.Lock()  # Блокировка для защиты статусов писем
     
     def send_email(self, queued_email: QueuedEmail) -> bool:
         """
@@ -60,8 +61,10 @@ class SMTPService:
             True если успешно
         """
         try:
-            queued_email.status = EmailStatus.SENDING
-            queued_email.last_attempt = datetime.now()
+            # Устанавливаем статус SENDING с блокировкой
+            with self._status_lock:
+                queued_email.status = EmailStatus.SENDING
+                queued_email.last_attempt = datetime.now()
 
             # Задержка перед отправкой (для соблюдения лимитов SMTP)
             if self.delay_between_emails > 0:
@@ -70,7 +73,7 @@ class SMTPService:
 
             # Создаём сообщение
             msg = MIMEMultipart()
-            
+
             # Важно: From должен совпадать с email_login для авторизации
             # Для совместимости с Yandex, Gmail и другими
             if self.config.sender_name:
@@ -79,19 +82,27 @@ class SMTPService:
             else:
                 # Просто email
                 msg['From'] = self.config.email_login
-            
+
             msg['To'] = queued_email.recipient_email
             msg['Subject'] = queued_email.subject
 
             # Добавляем тело письма
             msg.attach(MIMEText(queued_email.body, 'plain', 'utf-8'))
 
-            # Добавляем вложения
-            for file_path in queued_email.attachments:
+            # Добавляем вложения (создаём копию списка для безопасности потока)
+            attachments_copy = list(queued_email.attachments)
+            attached_count = 0
+            for file_path in attachments_copy:
                 if Path(file_path).exists():
                     attachment = self._create_attachment(file_path)
                     if attachment:
                         msg.attach(attachment)
+                        attached_count += 1
+                        logger.debug(f"Вложение добавлено: {file_path} ({attached_count} из {len(attachments_copy)})")
+                else:
+                    logger.warning(f"Файл не найден при отправке: {file_path}")
+
+            logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений")
 
             # Подключение к серверу
             if self.config.use_ssl:
@@ -111,10 +122,12 @@ class SMTPService:
                 # Отправка
                 server.send_message(msg)
 
-                queued_email.status = EmailStatus.SENT
-                queued_email.sent_at = datetime.now()
+                # Успешная отправка - устанавливаем статус с блокировкой
+                with self._status_lock:
+                    queued_email.status = EmailStatus.SENT
+                    queued_email.sent_at = datetime.now()
 
-                logger.info(f"Письмо отправлено: {queued_email.recipient_email}")
+                logger.info(f"Письмо отправлено: {queued_email.recipient_email} ({attached_count} вложений)")
                 return True
 
             finally:
@@ -123,39 +136,43 @@ class SMTPService:
         except smtplib.SMTPAuthenticationError as e:
             error_msg = f"Ошибка авторизации SMTP: {str(e)}"
             logger.error(error_msg)
-            queued_email.status = EmailStatus.FAILED
-            queued_email.error_message = error_msg
+            with self._status_lock:
+                queued_email.status = EmailStatus.FAILED
+                queued_email.error_message = error_msg
             return False
 
         except smtplib.SMTPConnectError as e:
             error_msg = f"Ошибка подключения к SMTP серверу: {str(e)}"
             logger.error(error_msg)
-            queued_email.status = EmailStatus.FAILED
-            queued_email.error_message = error_msg
+            with self._status_lock:
+                queued_email.status = EmailStatus.FAILED
+                queued_email.error_message = error_msg
             return False
 
         except smtplib.SMTPSenderRefused as e:
             # Ошибка "Sender address rejected" - отклонён адрес отправителя
             error_msg = f"Адрес отправителя отклонён: {str(e)}. Убедитесь, что From совпадает с логином авторизации."
             logger.error(error_msg)
-            queued_email.status = EmailStatus.FAILED
-            queued_email.error_message = error_msg
+            with self._status_lock:
+                queued_email.status = EmailStatus.FAILED
+                queued_email.error_message = error_msg
             return False
 
         except Exception as e:
             error_msg = f"Ошибка отправки письма: {str(e)}"
             logger.error(error_msg)
-            queued_email.status = EmailStatus.FAILED
-            queued_email.error_message = error_msg
+            with self._status_lock:
+                queued_email.status = EmailStatus.FAILED
+                queued_email.error_message = error_msg
             return False
     
     def _create_attachment(self, file_path: str) -> Optional[MIMEBase]:
         """
         Создаёт вложение для письма.
-        
+
         Args:
             file_path: Путь к файлу
-            
+
         Returns:
             MIMEBase объект или None
         """
@@ -164,18 +181,35 @@ class SMTPService:
             if not path.exists():
                 logger.warning(f"Файл не найден: {file_path}")
                 return None
-            
-            with open(path, "rb") as attachment:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(attachment.read())
-            
+
+            # Получаем размер файла для логирования
+            file_size = path.stat().st_size
+            logger.debug(f"Чтение файла: {file_path} (размер: {file_size} байт)")
+
+            # Читаем файл полностью перед кодированием
+            with open(path, "rb") as attachment_file:
+                payload = attachment_file.read()
+
+            # Проверяем, что файл прочитан полностью
+            if len(payload) != file_size:
+                logger.error(f"Файл прочитан не полностью: {file_path} (ожидалось {file_size}, прочитано {len(payload)})")
+                return None
+
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(payload)
+
             encoders.encode_base64(part)
+            
+            # Используем ASCII-safe имя файла
+            filename = path.name
             part.add_header(
                 'Content-Disposition',
-                f'attachment; filename="{path.name}"'
+                f'attachment; filename="{filename}"'
             )
-            return part
             
+            logger.debug(f"Вложение создано: {filename} ({file_size} байт)")
+            return part
+
         except Exception as e:
             logger.error(f"Ошибка добавления вложения {file_path}: {str(e)}")
             return None
@@ -231,30 +265,28 @@ class SMTPService:
                 try:
                     success = future.result()
 
-                    if success:
-                        stats.sent += 1
-                        email.status = EmailStatus.SENT
-                    else:
-                        stats.failed += 1
-                        # Сразу устанавливаем FAILED без повторных попыток
-                        email.status = EmailStatus.FAILED
-                        logger.warning(f"Ошибка отправки для {email.recipient_email}: {email.error_message}")
+                    # Статус уже установлен в _send_single_email, просто считаем
+                    with self._status_lock:
+                        if success:
+                            stats.sent += 1
+                        else:
+                            stats.failed += 1
+                            logger.warning(f"Ошибка отправки для {email.recipient_email}: {email.error_message}")
 
-                    # Обновление статистики: sending = все, что ещё не завершено
-                    stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
-                    # sending = total - sent - failed - pending
-                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
+                        # Подсчёт статистики с блокировкой
+                        stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
+                        stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
 
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
 
                 except Exception as e:
                     logger.error(f"Ошибка в потоке для {email.recipient_email}: {str(e)}")
-                    stats.failed += 1
-                    email.status = EmailStatus.FAILED
-                    # Обновление статистики
-                    stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
-                    stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
+                    with self._status_lock:
+                        stats.failed += 1
+                        # Подсчёт статистики
+                        stats.pending = sum(1 for e in emails if e.status == EmailStatus.PENDING)
+                        stats.sending = len(emails) - stats.sent - stats.failed - stats.pending
                     if progress_callback:
                         progress_callback(i + 1, len(emails), email, stats)
 
