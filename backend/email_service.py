@@ -15,11 +15,11 @@ logger = logging.getLogger("email_sender")
 
 class EmailService:
     """Сервис для отправки email через Outlook"""
-
+    
     def __init__(self, config: EmailConfig):
         """
         Инициализация сервиса.
-
+        
         Args:
             config: Конфигурация email рассылки
         """
@@ -27,53 +27,51 @@ class EmailService:
         self.file_service = FileService()
         self.is_cancelled = False
         self.is_paused = False
-        # Outlook создаётся в каждом потоке отдельно
     
     def send_email(self, recipient: EmailRecipient) -> SendResult:
         """
         Отправляет письмо одному получателю.
-
+        
         Args:
             recipient: Получатель письма
-
+            
         Returns:
             Результат отправки
         """
         try:
             # Инициализируем COM для потока
             pythoncom.CoInitialize()
-
+            
             try:
-                # Создаём Outlook в этом потоке
                 outlook = win32.Dispatch('Outlook.Application')
                 mail = outlook.CreateItem(0)
                 mail.To = recipient.email
                 mail.Subject = self.config.subject
                 mail.Body = self.config.body
-
+                
                 # Прикрепляем файлы
                 attached_files = self._attach_files(mail, recipient)
-
+                
                 if not attached_files:
                     return SendResult(
                         success=False,
                         email=recipient.email,
                         error="Нет файлов для прикрепления"
                     )
-
+                
                 logger.info(f"Прикреплены файлы для {recipient.email}: {', '.join(attached_files)}")
-
+                
                 # Отправляем письмо
                 mail.Send()
-
+                
                 logger.info(f"Письмо отправлено: {recipient.email}")
-
+                
                 return SendResult(
                     success=True,
                     email=recipient.email,
                     attached_files=attached_files
                 )
-
+                
             except Exception as e:
                 error_msg = f"Ошибка отправки письма для {recipient.email}: {str(e)}"
                 logger.error(error_msg)
@@ -82,14 +80,14 @@ class EmailService:
                     email=recipient.email,
                     error=str(e)
                 )
-
+            
             finally:
                 # Освобождаем COM
                 try:
                     pythoncom.CoUninitialize()
                 except:
                     pass
-
+                    
         except Exception as e:
             error_msg = f"Критическая ошибка в потоке для {recipient.email}: {str(e)}"
             logger.error(error_msg)
@@ -194,46 +192,45 @@ class EmailService:
     def preview_email(self, recipient: EmailRecipient) -> bool:
         """
         Показывает предварительный просмотр письма.
-
+        
         Args:
             recipient: Получатель для превью
-
+            
         Returns:
             True если успешно
         """
         try:
-            # Инициализируем COM
             pythoncom.CoInitialize()
-
+            
             try:
                 outlook = win32.Dispatch('Outlook.Application')
                 mail = outlook.CreateItem(0)
                 mail.To = recipient.email
                 mail.Subject = self.config.subject
                 mail.Body = self.config.body
-
+                
                 # Прикрепляем файлы
                 attached_files = self._attach_files(mail, recipient)
-
+                
                 # Показываем письмо
                 mail.Display()
-
+                
                 logger.info(f"Предварительный просмотр письма для: {recipient.email}")
                 if attached_files:
                     logger.info(f"Прикрепленные файлы: {', '.join(attached_files)}")
-
+                
                 return True
-
+                
             except Exception as e:
                 logger.error(f"Ошибка предварительного просмотра: {str(e)}")
                 return False
-
+            
             finally:
                 try:
                     pythoncom.CoUninitialize()
                 except:
                     pass
-
+                    
         except Exception as e:
             logger.error(f"Критическая ошибка в предварительном просмотре: {str(e)}")
             return False
