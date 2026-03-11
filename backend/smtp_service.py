@@ -2,6 +2,7 @@
 
 import smtplib
 import ssl
+import random
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -12,6 +13,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import threading
+import time
 
 from models.smtp_models import SMTPConfig, QueuedEmail, EmailStatus, SendStatistics
 
@@ -21,22 +23,44 @@ logger = logging.getLogger("email_sender")
 class SMTPService:
     """Сервис для отправки email через SMTP"""
 
-    def __init__(self, config: SMTPConfig, thread_count: int = 3, delay_between_emails: float = 0.0):
+    def __init__(
+        self,
+        config: SMTPConfig,
+        thread_count: int = 3,
+        delay_between_emails: float = 1.0,
+        batch_size: int = 50,
+        batch_delay: float = 10.0,
+        jitter: float = 0.3,
+        warmup_count: int = 20,
+        warmup_delay: float = 2.0
+    ):
         """
         Инициализация SMTP сервиса.
 
         Args:
             config: Конфигурация SMTP сервера
             thread_count: Количество потоков для отправки (по умолчанию 3)
-            delay_between_emails: Задержка между письмами в секундах (по умолчанию 0)
+            delay_between_emails: Задержка между письмами в секундах (по умолчанию 1.0)
+            batch_size: Количество писем в пакете перед паузой (по умолчанию 50)
+            batch_delay: Пауза между пакетами в секундах (по умолчанию 10.0)
+            jitter: Разброс задержки ±X сек для случайности (по умолчанию 0.3)
+            warmup_count: Количество писем с увеличенной задержкой для "разогрева" (по умолчанию 20)
+            warmup_delay: Увеличенная задержка для первых писем (по умолчанию 2.0)
         """
         self.config = config
         self.thread_count = min(max(thread_count, 1), 10)  # Ограничение 1-10
         self.delay_between_emails = delay_between_emails  # Задержка в секундах
+        self.batch_size = batch_size
+        self.batch_delay = batch_delay
+        self.jitter = jitter
+        self.warmup_count = warmup_count
+        self.warmup_delay = warmup_delay
         self.is_cancelled = False
         self.is_paused = False
         self._pause_lock = threading.Lock()
         self._status_lock = threading.Lock()  # Блокировка для защиты статусов писем
+        self._sent_count = 0  # Счётчик отправленных писем для warm-up
+        self._sent_count_lock = threading.Lock()
     
     def send_email(self, queued_email: QueuedEmail) -> bool:
         """
@@ -67,9 +91,7 @@ class SMTPService:
                 queued_email.last_attempt = datetime.now()
 
             # Задержка перед отправкой (для соблюдения лимитов SMTP)
-            if self.delay_between_emails > 0:
-                import time
-                time.sleep(self.delay_between_emails)
+            self._apply_delay()
 
             # Создаём сообщение
             msg = MIMEMultipart()
@@ -213,7 +235,38 @@ class SMTPService:
         except Exception as e:
             logger.error(f"Ошибка добавления вложения {file_path}: {str(e)}")
             return None
-    
+
+    def _apply_delay(self):
+        """
+        Применяет задержку с учётом warm-up, jitter и batch pause.
+        Потокобезопасная версия.
+        """
+        if self.delay_between_emails <= 0:
+            return
+
+        # Определяем текущую задержку (warm-up или обычная)
+        with self._sent_count_lock:
+            current_count = self._sent_count
+            self._sent_count += 1
+
+            if current_count < self.warmup_count:
+                # Warm-up режим: увеличенная задержка
+                base_delay = self.warmup_delay
+            else:
+                base_delay = self.delay_between_emails
+
+        # Добавляем jitter для случайности (±X сек)
+        jitter_value = random.uniform(-self.jitter, self.jitter)
+        actual_delay = max(0.1, base_delay + jitter_value)
+
+        # Основная задержка
+        time.sleep(actual_delay)
+
+        # Пауза между пакетами (после каждого batch_size писем)
+        if self.batch_size > 0 and current_count > 0 and current_count % self.batch_size == 0:
+            logger.info(f"Пауза между пакетами: {self.batch_delay} сек (отправлено {current_count} писем)")
+            time.sleep(self.batch_delay)
+
     def send_bulk(
         self,
         emails: List[QueuedEmail],
@@ -231,6 +284,7 @@ class SMTPService:
         """
         self.is_cancelled = False
         self.is_paused = False
+        self._sent_count = 0  # Сброс счётчика для warm-up
 
         stats = SendStatistics(total=len(emails))
 

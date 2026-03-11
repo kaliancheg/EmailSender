@@ -150,11 +150,12 @@ class SMTPSettingsDialog:
         if not config:
             messagebox.showerror("Ошибка", "Заполните все поля")
             return
-        
+
         from backend.smtp_service import SMTPService
-        service = SMTPService(config)
+        # Для теста используем минимальные задержки
+        service = SMTPService(config, delay_between_emails=0.1, warmup_count=0)
         success, message = service.test_connection()
-        
+
         if success:
             messagebox.showinfo("Успех", f"✅ {message}")
         else:

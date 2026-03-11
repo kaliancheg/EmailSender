@@ -128,7 +128,7 @@ class SettingsFrame(ttk.LabelFrame, ContextMenuMixin):
         ttk.Spinbox(self, from_=1, to=10, textvariable=self.thread_count, width=5).grid(
             row=5, column=1, padx=5, pady=5, sticky=tk.W
         )
-        ttk.Label(self, text="(Рекомендуется 3-5 потоков)").grid(
+        ttk.Label(self, text="(Рекомендуется 1-3 потоков)").grid(
             row=5, column=1, padx=80, pady=5, sticky=tk.W
         )
         
