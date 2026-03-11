@@ -59,6 +59,7 @@ class EmailSenderApp:
         self.send_start_time: Optional[datetime] = None
         self.send_elapsed_time: float = 0.0
         self.send_timer_job: Optional[str] = None
+        self.last_stats: Optional[SendStatistics] = None  # Последняя статистика для обновления таймера
 
         # Список email-адресов с ошибками отправки
         self.failed_emails: List[str] = []
@@ -452,13 +453,18 @@ class EmailSenderApp:
 
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
+        # Сохраняем последнюю статистику для обновления таймера
+        self.last_stats = stats
+        
         # Форматируем elapsed time
         elapsed_str = self._format_elapsed_time(self.send_elapsed_time)
-        
+
+        # Используем фиксированную ширину полей для стабильного отображения
+        # sending: 2 знака, sent: 3 знака, failed: 3 знака, время: 8 знаков (ЧЧ:ММ:СС)
         text = (
-            f"📤 В процессе: {stats.sending} | "
-            f"✅ Отправлено: {stats.sent} | "
-            f"❌ Ошибка: {stats.failed} | "
+            f"📤 В процессе: {stats.sending:2d} | "
+            f"✅ Отправлено: {stats.sent:3d} | "
+            f"❌ Ошибка: {stats.failed:3d} | "
             f"⏱️ Время: {elapsed_str}"
         )
         self.stats_label.config(text=text)
@@ -480,17 +486,19 @@ class EmailSenderApp:
         """Обновляет таймер рассылки"""
         if self.send_start_time and not self.is_cancelled:
             self.send_elapsed_time = (datetime.now() - self.send_start_time).total_seconds()
-            # Обновляем отображение статистики
-            if hasattr(self, 'stats_label'):
-                # Находим текущую статистику и обновляем только время
-                current_text = self.stats_label.cget("text")
-                # Пересоздаём текст с новым временем
+            
+            # Обновляем статистику с последними данными
+            if self.last_stats:
                 elapsed_str = self._format_elapsed_time(self.send_elapsed_time)
-                # Разбираем текущий текст и заменяем время
-                parts = current_text.split('|')
-                if len(parts) >= 4:
-                    new_parts = parts[:-1] + [f" ⏱️ Время: {elapsed_str}"]
-                    self.stats_label.config(text=' |'.join(new_parts))
+                stats = self.last_stats
+                text = (
+                    f"📤 В процессе: {stats.sending:2d} | "
+                    f"✅ Отправлено: {stats.sent:3d} | "
+                    f"❌ Ошибка: {stats.failed:3d} | "
+                    f"⏱️ Время: {elapsed_str}"
+                )
+                self.stats_label.config(text=text)
+            
             # Планируем следующее обновление через 1 секунду
             self.send_timer_job = self.root.after(1000, self._update_send_timer)
 
