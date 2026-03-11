@@ -55,6 +55,11 @@ class EmailSenderApp:
         self.sent_count = 0
         self.failed_count = 0
 
+        # Таймер рассылки
+        self.send_start_time: Optional[datetime] = None
+        self.send_elapsed_time: float = 0.0
+        self.send_timer_job: Optional[str] = None
+
         # Список email-адресов с ошибками отправки
         self.failed_emails: List[str] = []
         self.failed_emails_lock = threading.Lock()
@@ -65,7 +70,7 @@ class EmailSenderApp:
 
         # Очередь UI
         self.ui_queue = queue.Queue()
-        
+
         # Кэш аккаунтов Outlook (чтобы не запрашивать каждый раз)
         self.outlook_accounts_cached: List[str] = []
         self.outlook_accounts_loaded = False
@@ -447,13 +452,55 @@ class EmailSenderApp:
 
     def _update_stats(self, stats: SendStatistics):
         """Обновляет статистику SMTP"""
+        # Форматируем elapsed time
+        elapsed_str = self._format_elapsed_time(self.send_elapsed_time)
+        
         text = (
             f"📤 В процессе: {stats.sending} | "
             f"✅ Отправлено: {stats.sent} | "
             f"❌ Ошибка: {stats.failed} | "
-            f"🕐 В очереди: {stats.pending}"
+            f"⏱️ Время: {elapsed_str}"
         )
         self.stats_label.config(text=text)
+
+    def _format_elapsed_time(self, seconds: float) -> str:
+        """Форматирует прошедшее время в ЧЧ:ММ:СС"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _start_send_timer(self):
+        """Запускает таймер рассылки"""
+        self.send_start_time = datetime.now()
+        self.send_elapsed_time = 0.0
+        self._update_send_timer()
+
+    def _update_send_timer(self):
+        """Обновляет таймер рассылки"""
+        if self.send_start_time and not self.is_cancelled:
+            self.send_elapsed_time = (datetime.now() - self.send_start_time).total_seconds()
+            # Обновляем отображение статистики
+            if hasattr(self, 'stats_label'):
+                # Находим текущую статистику и обновляем только время
+                current_text = self.stats_label.cget("text")
+                # Пересоздаём текст с новым временем
+                elapsed_str = self._format_elapsed_time(self.send_elapsed_time)
+                # Разбираем текущий текст и заменяем время
+                parts = current_text.split('|')
+                if len(parts) >= 4:
+                    new_parts = parts[:-1] + [f" ⏱️ Время: {elapsed_str}"]
+                    self.stats_label.config(text=' |'.join(new_parts))
+            # Планируем следующее обновление через 1 секунду
+            self.send_timer_job = self.root.after(1000, self._update_send_timer)
+
+    def _stop_send_timer(self):
+        """Останавливает таймер рассылки"""
+        if self.send_timer_job:
+            self.root.after_cancel(self.send_timer_job)
+            self.send_timer_job = None
+        if self.send_start_time:
+            self.send_elapsed_time = (datetime.now() - self.send_start_time).total_seconds()
 
     def _init_stats_display(self):
         """Инициализирует отображение статистики текстовыми метками"""
@@ -461,12 +508,15 @@ class EmailSenderApp:
             f"📤 В процессе: 0 | "
             f"✅ Отправлено: 0 | "
             f"❌ Ошибка: 0 | "
-            f"🕐 В очереди: 0"
+            f"⏱️ Время: 00:00:00"
         )
         self.stats_label.config(text=text)
 
     def _on_send_complete(self, item: dict):
         """Обработка завершения рассылки"""
+        # Останавливаем таймер
+        self._stop_send_timer()
+        
         self.send_button.config(state=tk.NORMAL)
         self.pause_button.config(state=tk.DISABLED)
         self.cancel_button.config(state=tk.DISABLED)
@@ -584,6 +634,9 @@ class EmailSenderApp:
         self.email_service = EmailService(config)
 
         self._log_message(f"Подготовка к отправке через Outlook: 0/{self.total_emails}")
+        
+        # Запускаем таймер
+        self._start_send_timer()
 
         threading.Thread(
             target=self._send_outlook_thread,
@@ -606,7 +659,7 @@ class EmailSenderApp:
         # Передаём количество потоков и задержку из настроек
         # Задержка 0.5 секунды для соблюдения лимитов Yandex/Gmail
         self.smtp_service = SMTPService(
-            config, 
+            config,
             thread_count=self.settings_frame.thread_count.get(),
             delay_between_emails=0.5  # Задержка 0.5 секунды между письмами
         )
@@ -638,6 +691,9 @@ class EmailSenderApp:
             self.email_queue.append(queued_email)
 
         self._log_message(f"Подготовка к отправке через SMTP: 0/{self.total_emails}")
+        
+        # Запускаем таймер
+        self._start_send_timer()
 
         # Инициализация статистики в начале рассылки
         initial_stats = SendStatistics(
