@@ -395,9 +395,23 @@ class EmailSenderApp:
         if not file_path:
             messagebox.showwarning("Предупреждение", "Сначала выберите Excel файл")
             return
-        
+
         self._log_message("Обновление количества получателей...")
-        self._update_recipients_count(file_path)
+        # Обновляем только счётчик в файле, НЕ сбрасывая статистику рассылки
+        try:
+            recipients = ExcelService.read_recipients(file_path)
+            count = len(recipients)
+            self.recipients_count_label.config(
+                text=f"📋 Писем в файле: {count}",
+                foreground="green" if count > 0 else "red"
+            )
+            self._log_message(f"Загружено {count} получателей из Excel")
+        except Exception as e:
+            self.recipients_count_label.config(
+                text="📋 Писем в файле: ошибка",
+                foreground="red"
+            )
+            self._log_message(f"Ошибка подсчёта получателей: {str(e)}", "ERROR")
 
     def _browse_folder(self, folder_number: int):
         """Выбор папки"""
@@ -520,6 +534,25 @@ class EmailSenderApp:
         )
         self.stats_label.config(text=text)
 
+    def _update_stats_display(self):
+        """Обновляет отображение статистики в начальное состояние"""
+        self._init_stats_display()
+        # Обновляем счётчик получателей без изменения статистики
+        file_path = self.settings_frame.excel_path.get()
+        if file_path:
+            try:
+                recipients = ExcelService.read_recipients(file_path)
+                count = len(recipients)
+                self.recipients_count_label.config(
+                    text=f"📋 Писем в файле: {count}",
+                    foreground="green" if count > 0 else "red"
+                )
+            except Exception:
+                self.recipients_count_label.config(
+                    text="📋 Писем в файле: 0",
+                    foreground="red"
+                )
+
     def _on_send_complete(self, item: dict):
         """Обработка завершения рассылки"""
         # Останавливаем таймер
@@ -604,6 +637,22 @@ class EmailSenderApp:
                 self.failed_emails.clear()
             self.failed_emails_file_path = None
 
+            # Сброс статистики в начальное состояние
+            self.last_stats = None
+            initial_stats = SendStatistics(
+                total=0,
+                sent=0,
+                failed=0,
+                pending=0,
+                sending=0
+            )
+            self.ui_queue.put({
+                'type': 'stats',
+                'stats': initial_stats
+            })
+            self.send_elapsed_time = 0.0
+            self._update_stats_display()
+
             # Блокировка кнопок
             self.send_button.config(state=tk.DISABLED)
             self.pause_button.config(state=tk.NORMAL)
@@ -642,9 +691,21 @@ class EmailSenderApp:
         self.email_service = EmailService(config)
 
         self._log_message(f"Подготовка к отправке через Outlook: 0/{self.total_emails}")
-        
+
         # Запускаем таймер
         self._start_send_timer()
+
+        # Обновляем статистику с правильным total
+        self.ui_queue.put({
+            'type': 'stats',
+            'stats': SendStatistics(
+                total=len(recipients),
+                sent=0,
+                failed=0,
+                pending=len(recipients),
+                sending=0
+            )
+        })
 
         threading.Thread(
             target=self._send_outlook_thread,
@@ -708,21 +769,20 @@ class EmailSenderApp:
             self.email_queue.append(queued_email)
 
         self._log_message(f"Подготовка к отправке через SMTP: 0/{self.total_emails}")
-        
+
         # Запускаем таймер
         self._start_send_timer()
 
-        # Инициализация статистики в начале рассылки
-        initial_stats = SendStatistics(
-            total=len(self.email_queue),
-            sent=0,
-            failed=0,
-            pending=len(self.email_queue),
-            sending=0
-        )
+        # Обновляем статистику с правильным total
         self.ui_queue.put({
             'type': 'stats',
-            'stats': initial_stats
+            'stats': SendStatistics(
+                total=len(self.email_queue),
+                sent=0,
+                failed=0,
+                pending=len(self.email_queue),
+                sending=0
+            )
         })
 
         threading.Thread(
