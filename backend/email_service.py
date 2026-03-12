@@ -127,49 +127,54 @@ class EmailService:
         
         return attached_files
     
-    def send_bulk(self, recipients: List[EmailRecipient], 
+    def send_bulk(self, recipients: List[EmailRecipient],
                   progress_callback: Optional[Callable[[int, int, SendResult], None]] = None) -> tuple[int, int]:
         """
         Массовая отправка писем.
-        
+
         Args:
             recipients: Список получателей
             progress_callback: Callback для обновления прогресса (current, total, result)
-            
+
         Returns:
             Кортеж (успешно, ошибок)
         """
         self.is_cancelled = False
         self.is_paused = False
-        
+
         max_workers = min(self.config.thread_count, len(recipients))
         success_count = 0
         failed_count = 0
-        
+
         logger.info(f"Запуск {max_workers} потоков для отправки {len(recipients)} писем")
-        
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(self.send_email, recipient): i 
+                executor.submit(self.send_email, recipient): i
                 for i, recipient in enumerate(recipients)
             }
-            
+
             for i, future in enumerate(as_completed(futures)):
                 if self.is_cancelled:
                     for f in futures:
                         f.cancel()
                     break
-                
+
+                # Проверка паузы
+                while self.is_paused and not self.is_cancelled:
+                    import time
+                    time.sleep(0.5)
+
                 result = future.result()
-                
+
                 if result.success:
                     success_count += 1
                 else:
                     failed_count += 1
-                
+
                 if progress_callback:
                     progress_callback(i + 1, len(recipients), result)
-        
+
         return success_count, failed_count
     
     def cancel(self):

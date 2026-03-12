@@ -85,6 +85,10 @@ class SMTPService:
             True если успешно
         """
         try:
+            # Проверка паузы перед отправкой
+            while self.is_paused and not self.is_cancelled:
+                time.sleep(0.5)
+
             # Устанавливаем статус SENDING с блокировкой
             with self._status_lock:
                 queued_email.status = EmailStatus.SENDING
@@ -308,11 +312,6 @@ class SMTPService:
                     for f in future_to_email:
                         f.cancel()
                     break
-
-                # Пауза
-                while self.is_paused and not self.is_cancelled:
-                    import time
-                    time.sleep(0.5)
 
                 email = future_to_email[future]
 
