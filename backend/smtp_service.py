@@ -89,9 +89,17 @@ class SMTPService:
             True если успешно
         """
         try:
+            # Проверка отмены перед началом
+            if self.is_cancelled:
+                return False
+
             # Проверка паузы перед отправкой
             while self.is_paused and not self.is_cancelled:
                 time.sleep(0.5)
+            
+            # Проверка отмены после выхода из паузы
+            if self.is_cancelled:
+                return False
 
             # Устанавливаем статус SENDING с блокировкой
             with self._status_lock:
@@ -100,6 +108,10 @@ class SMTPService:
 
             # Задержка перед отправкой (для соблюдения лимитов SMTP)
             self._apply_delay()
+            
+            # Проверка отмены после задержки
+            if self.is_cancelled:
+                return False
 
             # Создаём сообщение
             msg = MIMEMultipart()
@@ -123,6 +135,10 @@ class SMTPService:
             attachments_copy = list(queued_email.attachments)
             attached_count = 0
             for file_path in attachments_copy:
+                # Проверка отмены во время добавления вложений
+                if self.is_cancelled:
+                    return False
+                    
                 if Path(file_path).exists():
                     attachment = self._create_attachment(file_path)
                     if attachment:
@@ -132,7 +148,7 @@ class SMTPService:
                 else:
                     logger.warning(f"Файл не найден при отправке: {file_path}")
 
-            logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений")
+            logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений)")
 
             # Подключение к серверу
             if self.config.use_ssl:
@@ -146,8 +162,18 @@ class SMTPService:
                     server.starttls(context=ssl.create_default_context())
 
             try:
+                # Проверка отмены перед авторизацией
+                if self.is_cancelled:
+                    server.quit()
+                    return False
+                    
                 # Авторизация
                 server.login(self.config.email_login, self.config.email_password)
+
+                # Проверка отмены перед отправкой
+                if self.is_cancelled:
+                    server.quit()
+                    return False
 
                 # Отправка
                 server.send_message(msg)
@@ -344,9 +370,11 @@ class SMTPService:
             for i, future in enumerate(as_completed(future_to_email)):
                 if self.is_cancelled:
                     logger.warning("Рассылка отменена пользователем")
-                    # Отменяем оставшиеся задачи
+                    # Отменяем все оставшиеся задачи
                     for f in future_to_email:
                         f.cancel()
+                    # Немедленно останавливаем executor
+                    executor.shutdown(wait=False, cancel_futures=True)
                     break
 
                 email = future_to_email[future]
