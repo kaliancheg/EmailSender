@@ -3,9 +3,13 @@
 import smtplib
 import ssl
 import random
+import mimetypes
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
+from email.mime.application import MIMEApplication
+from email.mime.image import MIMEImage
+from email.mime.audio import MIMEAudio
 from email import encoders
 from pathlib import Path
 from typing import List, Optional, Callable
@@ -194,7 +198,7 @@ class SMTPService:
     
     def _create_attachment(self, file_path: str) -> Optional[MIMEBase]:
         """
-        Создаёт вложение для письма.
+        Создаёт вложение для письма с правильным MIME-типом.
 
         Args:
             file_path: Путь к файлу
@@ -221,19 +225,51 @@ class SMTPService:
                 logger.error(f"Файл прочитан не полностью: {file_path} (ожидалось {file_size}, прочитано {len(payload)})")
                 return None
 
-            part = MIMEBase('application', 'octet-stream')
-            part.set_payload(payload)
-
-            encoders.encode_base64(part)
+            # Определяем MIME-тип на основе расширения файла
+            content_type, encoding = mimetypes.guess_type(str(path))
             
+            if content_type:
+                main_type, sub_type = content_type.split('/', 1)
+                
+                # Используем специализированные классы для известных типов
+                if main_type == 'application' and sub_type == 'pdf':
+                    part = MIMEApplication(payload, _subtype='pdf')
+                elif main_type == 'application' and 'excel' in sub_type:
+                    # XLSX и другие Excel форматы
+                    part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                elif main_type == 'application' and 'word' in sub_type:
+                    # DOCX и другие Word форматы
+                    part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.wordprocessingml.document')
+                elif main_type == 'application' and 'powerpoint' in sub_type:
+                    # PPTX и другие PowerPoint форматы
+                    part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.presentationml.presentation')
+                elif main_type == 'image':
+                    part = MIMEImage(payload, _subtype=sub_type)
+                elif main_type == 'audio':
+                    part = MIMEAudio(payload, _subtype=sub_type)
+                elif main_type == 'text':
+                    part = MIMEText(payload.decode('utf-8', errors='replace'), _subtype=sub_type)
+                else:
+                    # Для остальных типов используем application с правильным subtype
+                    part = MIMEApplication(payload, _subtype=sub_type)
+            else:
+                # Если тип не определён, используем octet-stream как fallback
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(payload)
+                encoders.encode_base64(part)
+
+            # Для специализированных классов encode_base64 уже вызван внутри
+            if content_type and not (main_type == 'text'):
+                encoders.encode_base64(part)
+
             # Используем ASCII-safe имя файла
             filename = path.name
             part.add_header(
                 'Content-Disposition',
                 f'attachment; filename="{filename}"'
             )
-            
-            logger.debug(f"Вложение создано: {filename} ({file_size} байт)")
+
+            logger.debug(f"Вложение создано: {filename} (размер: {file_size} байт, тип: {content_type or 'application/octet-stream'})")
             return part
 
         except Exception as e:
