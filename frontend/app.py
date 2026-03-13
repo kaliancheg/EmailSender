@@ -920,11 +920,15 @@ class EmailSenderApp:
     def _cancel_send(self):
         """Отмена рассылки"""
         self.is_cancelled = True
+        self.is_paused = False
         if self.email_service:
             self.email_service.cancel()
         if self.smtp_service:
             self.smtp_service.cancel()
         self._log_message("Рассылка отменена пользователем", "WARNING")
+        
+        # Сброс кнопки паузы в исходное состояние
+        self.pause_button.config(text="Пауза")
 
     def _preview_email(self):
         """Предварительный просмотр случайного получателя"""
@@ -999,6 +1003,10 @@ class EmailSenderApp:
         self.refresh_count_button.config(state=tk.NORMAL)
         # Кнопка ошибок активна только если есть ошибки
         self.errors_button.config(state=tk.NORMAL if self.failed_emails else tk.DISABLED)
+        
+        # Сброс кнопки паузы в исходное состояние
+        self.pause_button.config(text="Пауза")
+        self.is_paused = False
 
     def _save_failed_emails_to_file(self):
         """Сохраняет список email-адресов с ошибками в текстовый файл (один раз за сессию)"""
