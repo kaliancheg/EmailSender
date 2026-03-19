@@ -253,20 +253,21 @@ class SMTPService:
 
             # Определяем MIME-тип на основе расширения файла
             content_type, encoding = mimetypes.guess_type(str(path))
+            file_ext = path.suffix.lower()
             
             if content_type:
                 main_type, sub_type = content_type.split('/', 1)
                 
                 # Используем специализированные классы для известных типов
-                if main_type == 'application' and sub_type == 'pdf':
+                if file_ext == '.pdf':
                     part = MIMEApplication(payload, _subtype='pdf')
-                elif main_type == 'application' and 'excel' in sub_type:
+                elif file_ext in ('.xlsx', '.xlsm'):
                     # XLSX и другие Excel форматы
                     part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                elif main_type == 'application' and 'word' in sub_type:
+                elif file_ext in ('.docx', '.docm'):
                     # DOCX и другие Word форматы
                     part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.wordprocessingml.document')
-                elif main_type == 'application' and 'powerpoint' in sub_type:
+                elif file_ext in ('.pptx', '.pptm'):
                     # PPTX и другие PowerPoint форматы
                     part = MIMEApplication(payload, _subtype='vnd.openxmlformats-officedocument.presentationml.presentation')
                 elif main_type == 'image':
