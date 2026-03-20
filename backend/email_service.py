@@ -1,6 +1,7 @@
 """Сервис для отправки email через Outlook"""
 
 import os
+import time
 import pythoncom
 import win32com.client as win32
 from typing import List, Optional, Callable
@@ -100,31 +101,38 @@ class EmailService:
     def _attach_files(self, mail, recipient: EmailRecipient) -> List[str]:
         """
         Прикрепляет файлы к письму.
-        
+
         Args:
             mail: Outlook Mail объект
             recipient: Получатель с файлами
-            
+
         Returns:
             Список прикреплённых файлов
         """
         attached_files = []
-        
+
         files = [
             (recipient.file_01, 0),
             (recipient.file_02, 1),
             (recipient.file_03, 2)
         ]
-        
+
         for filename, folder_index in files:
             if filename:
                 folder_path = self.config.get_folder_path(folder_index)
                 if folder_path:
                     file_path = self.file_service.find_file_in_folder(folder_path, filename)
                     if file_path:
+                        # Проверка паузы перед добавлением вложения
+                        while self.is_paused and not self.is_cancelled:
+                            time.sleep(0.3)
+                        
+                        if self.is_cancelled:
+                            break
+                        
                         mail.Attachments.Add(file_path)
                         attached_files.append(os.path.basename(file_path))
-        
+
         return attached_files
     
     def send_bulk(self, recipients: List[EmailRecipient],

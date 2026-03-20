@@ -135,10 +135,17 @@ class SMTPService:
             attachments_copy = list(queued_email.attachments)
             attached_count = 0
             for file_path in attachments_copy:
-                # Проверка отмены во время добавления вложений
+                # Проверка отмены/паузы во время добавления вложений
                 if self.is_cancelled:
                     return False
-                    
+                
+                # Проверка паузы с ожиданием
+                while self.is_paused and not self.is_cancelled:
+                    time.sleep(0.3)
+                
+                if self.is_cancelled:
+                    return False
+
                 if Path(file_path).exists():
                     attachment = self._create_attachment(file_path)
                     if attachment:
@@ -149,6 +156,13 @@ class SMTPService:
                     logger.warning(f"Файл не найден при отправке: {file_path}")
 
             logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений)")
+
+            # Проверка паузы перед подключением к серверу
+            while self.is_paused and not self.is_cancelled:
+                time.sleep(0.3)
+            
+            if self.is_cancelled:
+                return False
 
             # Подключение к серверу
             if self.config.use_ssl:
@@ -162,15 +176,31 @@ class SMTPService:
                     server.starttls(context=ssl.create_default_context())
 
             try:
-                # Проверка отмены перед авторизацией
+                # Проверка отмены/паузы перед авторизацией
                 if self.is_cancelled:
                     server.quit()
                     return False
-                    
+                
+                # Проверка паузы перед авторизацией
+                while self.is_paused and not self.is_cancelled:
+                    time.sleep(0.3)
+                
+                if self.is_cancelled:
+                    server.quit()
+                    return False
+
                 # Авторизация
                 server.login(self.config.email_login, self.config.email_password)
 
-                # Проверка отмены перед отправкой
+                # Проверка отмены/паузы перед отправкой
+                if self.is_cancelled:
+                    server.quit()
+                    return False
+                
+                # Проверка паузы перед отправкой
+                while self.is_paused and not self.is_cancelled:
+                    time.sleep(0.3)
+                
                 if self.is_cancelled:
                     server.quit()
                     return False

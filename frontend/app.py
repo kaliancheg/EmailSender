@@ -7,6 +7,7 @@ import threading
 import random
 import os
 import subprocess
+import time
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -1126,9 +1127,15 @@ class EmailSenderApp:
         """Обработчик закрытия окна"""
         self._save_settings()
 
-        if self.email_service and self.email_service.is_cancelled:
+        # Принудительная отмена рассылки если она активна
+        if self.email_service:
             self.email_service.cancel()
-        if self.smtp_service and self.smtp_service.is_cancelled:
+            self.email_service.is_paused = False  # Сброс паузы для выхода из цикла
+        if self.smtp_service:
             self.smtp_service.cancel()
+            self.smtp_service.is_paused = False  # Сброс паузы для выхода из цикла
+
+        # Небольшая задержка для завершения потоков
+        time.sleep(0.3)
 
         self.root.destroy()
