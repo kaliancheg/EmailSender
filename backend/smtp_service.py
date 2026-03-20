@@ -257,7 +257,7 @@ class SMTPService:
             
             if content_type:
                 main_type, sub_type = content_type.split('/', 1)
-                
+
                 # Используем специализированные классы для известных типов
                 if file_ext == '.pdf':
                     part = MIMEApplication(payload, _subtype='pdf')
@@ -279,21 +279,27 @@ class SMTPService:
                 else:
                     # Для остальных типов используем application с правильным subtype
                     part = MIMEApplication(payload, _subtype=sub_type)
+                
+                # Кодируем в base64 для всех бинарных типов
+                if main_type != 'text':
+                    encoders.encode_base64(part)
             else:
                 # Если тип не определён, используем octet-stream как fallback
                 part = MIMEBase('application', 'octet-stream')
                 part.set_payload(payload)
                 encoders.encode_base64(part)
 
-            # Для специализированных классов encode_base64 уже вызван внутри
-            if content_type and not (main_type == 'text'):
-                encoders.encode_base64(part)
-
-            # Используем ASCII-safe имя файла
+            # Используем имя файла с поддержкой UTF-8 (RFC 2231)
             filename = path.name
             part.add_header(
                 'Content-Disposition',
-                f'attachment; filename="{filename}"'
+                'attachment',
+                filename=('utf-8', '', filename)
+            )
+            part.add_header(
+                'Content-Type',
+                part.get_content_type(),
+                name=('utf-8', '', filename)
             )
 
             logger.debug(f"Вложение создано: {filename} (размер: {file_size} байт, тип: {content_type or 'application/octet-stream'})")
