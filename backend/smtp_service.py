@@ -88,169 +88,247 @@ class SMTPService:
         Returns:
             True если успешно
         """
-        try:
-            # Проверка отмены перед началом
-            if self.is_cancelled:
-                return False
+        max_retries = 3
+        retry_delay = 2.0  # Базовая задержка между попытками
 
-            # Проверка паузы перед отправкой
-            while self.is_paused and not self.is_cancelled:
-                time.sleep(0.5)
-            
-            # Проверка отмены после выхода из паузы
-            if self.is_cancelled:
-                return False
-
-            # Устанавливаем статус SENDING с блокировкой
-            with self._status_lock:
-                queued_email.status = EmailStatus.SENDING
-                queued_email.last_attempt = datetime.now()
-
-            # Задержка перед отправкой (для соблюдения лимитов SMTP)
-            self._apply_delay()
-            
-            # Проверка отмены после задержки
-            if self.is_cancelled:
-                return False
-
-            # Создаём сообщение
-            msg = MIMEMultipart()
-
-            # Важно: From должен совпадать с email_login для авторизации
-            # Для совместимости с Yandex, Gmail и другими
-            if self.config.sender_name:
-                # Формат: "Имя <email>" - правильно для всех SMTP серверов
-                msg['From'] = f"{self.config.sender_name} <{self.config.email_login}>"
-            else:
-                # Просто email
-                msg['From'] = self.config.email_login
-
-            msg['To'] = queued_email.recipient_email
-            msg['Subject'] = queued_email.subject
-
-            # Добавляем тело письма
-            msg.attach(MIMEText(queued_email.body, 'plain', 'utf-8'))
-
-            # Добавляем вложения (создаём копию списка для безопасности потока)
-            attachments_copy = list(queued_email.attachments)
-            attached_count = 0
-            for file_path in attachments_copy:
-                # Проверка отмены/паузы во время добавления вложений
-                if self.is_cancelled:
-                    return False
-                
-                # Проверка паузы с ожиданием
-                while self.is_paused and not self.is_cancelled:
-                    time.sleep(0.3)
-                
-                if self.is_cancelled:
-                    return False
-
-                if Path(file_path).exists():
-                    attachment = self._create_attachment(file_path)
-                    if attachment:
-                        msg.attach(attachment)
-                        attached_count += 1
-                        logger.debug(f"Вложение добавлено: {file_path} ({attached_count} из {len(attachments_copy)})")
-                else:
-                    logger.warning(f"Файл не найден при отправке: {file_path}")
-
-            logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений)")
-
-            # Проверка паузы перед подключением к серверу
-            while self.is_paused and not self.is_cancelled:
-                time.sleep(0.3)
-            
-            if self.is_cancelled:
-                return False
-
-            # Подключение к серверу
-            if self.config.use_ssl:
-                # SSL подключение (порт 465)
-                context = ssl.create_default_context()
-                server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, context=context)
-            else:
-                # Обычное подключение с TLS (порт 587)
-                server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port)
-                if self.config.use_tls:
-                    server.starttls(context=ssl.create_default_context())
-
+        for attempt in range(max_retries):
             try:
-                # Проверка отмены/паузы перед авторизацией
+                # Проверка отмены перед началом
                 if self.is_cancelled:
-                    server.quit()
-                    return False
-                
-                # Проверка паузы перед авторизацией
-                while self.is_paused and not self.is_cancelled:
-                    time.sleep(0.3)
-                
-                if self.is_cancelled:
-                    server.quit()
                     return False
 
-                # Авторизация
-                server.login(self.config.email_login, self.config.email_password)
-
-                # Проверка отмены/паузы перед отправкой
-                if self.is_cancelled:
-                    server.quit()
-                    return False
-                
                 # Проверка паузы перед отправкой
                 while self.is_paused and not self.is_cancelled:
-                    time.sleep(0.3)
-                
+                    time.sleep(0.5)
+
+                # Проверка отмены после выхода из паузы
                 if self.is_cancelled:
-                    server.quit()
                     return False
 
-                # Отправка
-                server.send_message(msg)
-
-                # Успешная отправка - устанавливаем статус с блокировкой
+                # Устанавливаем статус SENDING с блокировкой
                 with self._status_lock:
-                    queued_email.status = EmailStatus.SENT
-                    queued_email.sent_at = datetime.now()
+                    queued_email.status = EmailStatus.SENDING
+                    queued_email.last_attempt = datetime.now()
 
-                logger.info(f"Письмо отправлено: {queued_email.recipient_email} ({attached_count} вложений)")
+                # Задержка перед отправкой (для соблюдения лимитов SMTP)
+                self._apply_delay()
+
+                # Проверка отмены после задержки
+                if self.is_cancelled:
+                    return False
+
+                # Создаём сообщение
+                msg = MIMEMultipart()
+
+                # Важно: From должен совпадать с email_login для авторизации
+                # Для совместимости с Yandex, Gmail и другими
+                if self.config.sender_name:
+                    # Формат: "Имя <email>" - правильно для всех SMTP серверов
+                    msg['From'] = f"{self.config.sender_name} <{self.config.email_login}>"
+                else:
+                    # Просто email
+                    msg['From'] = self.config.email_login
+
+                msg['To'] = queued_email.recipient_email
+                msg['Subject'] = queued_email.subject
+
+                # Добавляем тело письма
+                msg.attach(MIMEText(queued_email.body, 'plain', 'utf-8'))
+
+                # Добавляем вложения (создаём копию списка для безопасности потока)
+                attachments_copy = list(queued_email.attachments)
+                attached_count = 0
+                for file_path in attachments_copy:
+                    # Проверка отмены во время добавления вложений
+                    if self.is_cancelled:
+                        return False
+
+                    if Path(file_path).exists():
+                        attachment = self._create_attachment(file_path)
+                        if attachment:
+                            msg.attach(attachment)
+                            attached_count += 1
+                            logger.debug(f"Вложение добавлено: {file_path} ({attached_count} из {len(attachments_copy)})")
+                    else:
+                        logger.warning(f"Файл не найден при отправке: {file_path}")
+
+                logger.info(f"Подготовлено письмо для {queued_email.recipient_email}: {attached_count} вложений)")
+
+                # Подключение к серверу с повторными попытками
+                server = self._connect_with_retry(max_retries=3)
+                if server is None:
+                    raise Exception("Не удалось подключиться к SMTP серверу после нескольких попыток")
+
+                try:
+                    # Проверка отмены перед авторизацией
+                    if self.is_cancelled:
+                        server.quit()
+                        return False
+
+                    # Авторизация
+                    server.login(self.config.email_login, self.config.email_password)
+
+                    # Проверка отмены перед отправкой
+                    if self.is_cancelled:
+                        server.quit()
+                        return False
+
+                    # Отправка
+                    server.send_message(msg)
+
+                    # Успешная отправка - устанавливаем статус с блокировкой
+                    with self._status_lock:
+                        queued_email.status = EmailStatus.SENT
+                        queued_email.sent_at = datetime.now()
+
+                    logger.info(f"Письмо отправлено: {queued_email.recipient_email} ({attached_count} вложений)")
+                    return True
+
+                finally:
+                    try:
+                        server.quit()
+                    except:
+                        pass
+
+            except smtplib.SMTPAuthenticationError as e:
+                # Ошибка авторизации - не повторяем
+                error_msg = f"Ошибка авторизации SMTP: {str(e)}"
+                logger.error(error_msg)
+                with self._status_lock:
+                    queued_email.status = EmailStatus.FAILED
+                    queued_email.error_message = error_msg
+                return False
+
+            except smtplib.SMTPSenderRefused as e:
+                # Ошибка "Sender address rejected" - не повторяем
+                error_msg = f"Адрес отправителя отклонён: {str(e)}. Убедитесь, что From совпадает с логином авторизации."
+                logger.error(error_msg)
+                with self._status_lock:
+                    queued_email.status = EmailStatus.FAILED
+                    queued_email.error_message = error_msg
+                return False
+
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Проверяем, можно ли повторить попытку
+                can_retry = self._is_retryable_error(error_msg)
+                
+                if can_retry and attempt < max_retries - 1:
+                    # Повторная попытка с увеличивающейся задержкой
+                    retry_wait = retry_delay * (attempt + 1)
+                    logger.warning(f"Попытка {attempt + 1}/{max_retries} не удалась: {error_msg}. Повторная попытка через {retry_wait} сек...")
+                    time.sleep(retry_wait)
+                    continue
+                else:
+                    # Все попытки исчерпаны или ошибка критическая
+                    full_error_msg = f"Ошибка отправки письма: {error_msg}"
+                    logger.error(full_error_msg)
+                    with self._status_lock:
+                        queued_email.status = EmailStatus.FAILED
+                        queued_email.error_message = full_error_msg
+                    return False
+
+        # Должно быть достигнуто только если все попытки исчерпаны
+        error_msg = f"Ошибка отправки письма: исчерпаны попытки отправки"
+        logger.error(error_msg)
+        with self._status_lock:
+            queued_email.status = EmailStatus.FAILED
+            queued_email.error_message = error_msg
+        return False
+
+    def _is_retryable_error(self, error_msg: str) -> bool:
+        """
+        Проверяет, можно ли повторить попытку при данной ошибке.
+
+        Args:
+            error_msg: Сообщение об ошибке
+
+        Returns:
+            True если ошибка временная и можно повторить
+        """
+        error_lower = error_msg.lower()
+        
+        # Временные ошибки - можно повторять
+        retryable_patterns = [
+            'please run connect() first',
+            'connect() first',
+            'connection reset',
+            'connection aborted',
+            'connection timed out',
+            'timed out',
+            'temporary error',
+            'try again later',
+            'server busy',
+            'rate limit',
+            'too many connections',
+            'socket error',
+            'broken pipe',
+            'network is unreachable'
+        ]
+        
+        for pattern in retryable_patterns:
+            if pattern in error_lower:
                 return True
+        
+        # Ошибки авторизации и постоянные - не повторяем
+        non_retryable_patterns = [
+            'authentication',
+            'invalid credentials',
+            'access denied',
+            'permission denied',
+            'sender rejected',
+            'recipient rejected',
+            'mailbox unavailable',
+            'user unknown',
+            'relaying denied'
+        ]
+        
+        for pattern in non_retryable_patterns:
+            if pattern in error_lower:
+                return False
+        
+        # По умолчанию считаем ошибку временной (можно повторять)
+        return True
 
-            finally:
-                server.quit()
+    def _connect_with_retry(self, max_retries: int = 3, delay: float = 1.0) -> Optional[smtplib.SMTP]:
+        """
+        Подключается к SMTP серверу с повторными попытками.
 
-        except smtplib.SMTPAuthenticationError as e:
-            error_msg = f"Ошибка авторизации SMTP: {str(e)}"
-            logger.error(error_msg)
-            with self._status_lock:
-                queued_email.status = EmailStatus.FAILED
-                queued_email.error_message = error_msg
-            return False
+        Args:
+            max_retries: Максимальное количество попыток
+            delay: Базовая задержка между попытками
 
-        except smtplib.SMTPConnectError as e:
-            error_msg = f"Ошибка подключения к SMTP серверу: {str(e)}"
-            logger.error(error_msg)
-            with self._status_lock:
-                queued_email.status = EmailStatus.FAILED
-                queued_email.error_message = error_msg
-            return False
-
-        except smtplib.SMTPSenderRefused as e:
-            # Ошибка "Sender address rejected" - отклонён адрес отправителя
-            error_msg = f"Адрес отправителя отклонён: {str(e)}. Убедитесь, что From совпадает с логином авторизации."
-            logger.error(error_msg)
-            with self._status_lock:
-                queued_email.status = EmailStatus.FAILED
-                queued_email.error_message = error_msg
-            return False
-
-        except Exception as e:
-            error_msg = f"Ошибка отправки письма: {str(e)}"
-            logger.error(error_msg)
-            with self._status_lock:
-                queued_email.status = EmailStatus.FAILED
-                queued_email.error_message = error_msg
-            return False
+        Returns:
+            SMTP сервер или None если не удалось
+        """
+        for attempt in range(max_retries):
+            try:
+                if self.config.use_ssl:
+                    # SSL подключение (порт 465)
+                    context = ssl.create_default_context()
+                    server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, context=context)
+                else:
+                    # Обычное подключение с TLS (порт 587)
+                    server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port)
+                    if self.config.use_tls:
+                        server.starttls(context=ssl.create_default_context())
+                
+                # Проверяем, что подключение установлено
+                server.ehlo()
+                
+                logger.debug(f"SMTP подключение успешно (попытка {attempt + 1}/{max_retries})")
+                return server
+                
+            except Exception as e:
+                logger.warning(f"Попытка SMTP подключения {attempt + 1}/{max_retries} не удалась: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                else:
+                    logger.error(f"Не удалось подключиться к SMTP после {max_retries} попыток")
+                    return None
+        
+        return None
     
     def _create_attachment(self, file_path: str) -> Optional[MIMEBase]:
         """
